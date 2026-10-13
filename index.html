@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <title>GymOS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#08080a">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="GymOS">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="description" content="Private, offline gym tracker. All data stays on your iPhone.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="splash"><img src="icons/icon-192.png" alt="" width="72" height="72"></div>
+  <div id="boot-error" hidden></div>
+  <div id="app">
+    <main id="pages"></main>
+    <nav id="tabbar" aria-label="Tabs"></nav>
+  </div>
+  <div id="float-timer" class="hidden"></div>
+  <div id="modals"></div>
+  <noscript><p style="padding:24px;color:#fff">GymOS needs JavaScript.</p></noscript>
+  <script type="module">
+    import { boot } from './js/app.js';
+    boot().catch((e) => {
+      const el = document.getElementById('boot-error');
+      el.textContent = 'GymOS failed to start: ' + (e && e.message ? e.message : e);
+      el.hidden = false;
+      document.getElementById('splash')?.remove();
+      console.error(e);
+    });
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
