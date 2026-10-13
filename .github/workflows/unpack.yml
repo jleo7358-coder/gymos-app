@@ -1,0 +1,45 @@
+name: Unpack uploaded bundle
+
+on:
+  push:
+    branches: [main]
+    paths: [bundle.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack bundle.json into files
+        if: hashFiles('bundle.json') != ''
+        run: |
+          python3 - <<'PY'
+          import json, base64, os, shutil
+          entries = json.load(open('bundle.json'))
+          n = d = 0
+          for e in entries:
+              p = e['path']
+              if p.startswith('/') or '..' in p.split('/') or p.startswith('.github/'):
+                  continue
+              if e.get('delete'):
+                  if os.path.isdir(p): shutil.rmtree(p); d += 1
+                  elif os.path.exists(p): os.remove(p); d += 1
+                  continue
+              os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
+              if 'b64' in e:
+                  open(p, 'wb').write(base64.b64decode(e['b64']))
+              else:
+                  open(p, 'w', encoding='utf-8', newline='').write(e['text'])
+              n += 1
+          print('unpacked', n, 'files, deleted', d)
+          PY
+          rm bundle.json
+          git config user.name "gymos-bot"
+          git config user.email "gymos-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Unpack app bundle" || echo "nothing to commit"
+          git push
