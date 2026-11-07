@@ -9,7 +9,7 @@ export class AIError extends Error {}
 
 export const ai = {
   get key() { return getKV('gemini.key', '') || ''; },
-  setKey(k) { return k ? setKV('gemini.key', k.trim()) : deleteKV('gemini.key'); },
+  setKey(k) { return k ? setKV('gemini.key', k.replace(/\s+/g, '')) : deleteKV('gemini.key'); },
   get model() { return getKV('gemini.model', '') || ''; },
   setModel(m) { return m ? setKV('gemini.model', m) : deleteKV('gemini.model'); },
   get hasKey() { return !!this.key; },
@@ -22,9 +22,11 @@ async function call(path, { method = 'GET', body = null, timeoutMs = 60000 } = {
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
   try {
-    res = await fetch(`${API}/${path}${path.includes('?') ? '&' : '?'}key=${encodeURIComponent(ai.key)}`, {
-      method, signal: ctrl.signal,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
+    // Key goes in a header (not the URL), works for both "AIza…" and newer "AQ.…" keys.
+    const headers = { 'x-goog-api-key': ai.key };
+    if (body) headers['Content-Type'] = 'application/json';
+    res = await fetch(`${API}/${path}`, {
+      method, signal: ctrl.signal, headers,
       body: body ? JSON.stringify(body) : null,
     });
   } catch (e) {
@@ -35,7 +37,7 @@ async function call(path, { method = 'GET', body = null, timeoutMs = 60000 } = {
   try { j = await res.json(); } catch {}
   if (!res.ok) {
     const msg = (j && j.error && j.error.message) || '';
-    if (res.status === 400 && /api key/i.test(msg)) throw new AIError('That API key was rejected by Google. Check it in AI settings.');
+    if ((res.status === 400 || res.status === 401) && /api key/i.test(msg)) throw new AIError('That API key was rejected by Google. Check it in AI settings.');
     if (res.status === 403) throw new AIError('This API key is not allowed to use Gemini. Create a key in Google AI Studio.');
     if (res.status === 429) throw new AIError('Free Gemini limit reached for now. Wait a minute (or until tomorrow) and try again.');
     if (res.status === 404) throw new AIError('The selected Gemini model is unavailable. Tap “Test key” in AI settings to pick another.');

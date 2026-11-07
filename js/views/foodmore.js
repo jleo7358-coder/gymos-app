@@ -160,9 +160,9 @@ export class AISettingsScreen extends Screen {
     this.changes = { model: (el) => { ai.setModel(el.value); this.message = el.value ? `Using ${el.value}.` : 'Choosing automatically.'; this.err = false; changed(); } };
   }
   async save() {
-    const k = this.keyText.trim();
+    const k = this.keyText.replace(/\s+/g, '');
     if (!k) { this.message = 'Paste your key first.'; this.err = true; nav.refresh(); return; }
-    if (!/^[A-Za-z0-9_\-]{20,}$/.test(k)) { this.message = "That doesn't look like a Gemini API key (it usually starts with “AIza”)."; this.err = true; nav.refresh(); return; }
+    if (k.length < 20 || !/^[A-Za-z0-9_.\-]+$/.test(k)) { this.message = 'That doesn’t look like a complete key. Copy it again from AI Studio (it starts with “AIza” or “AQ.”).'; this.err = true; nav.refresh(); return; }
     await ai.setKey(k); await ai.setModel('');
     await this.test();
   }
@@ -190,7 +190,7 @@ export class AISettingsScreen extends Screen {
       </div>
       <div class="section-label">Your key</div>
       <div class="list grouped form">
-        <div class="row"><input class="text-input full mono" type="${this.show ? 'text' : 'password'}" placeholder="AIza…" value="${esc(this.keyText)}" data-input="key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="row"><input class="text-input full mono" type="${this.show ? 'text' : 'password'}" placeholder="AIza… or AQ.…" value="${esc(this.keyText)}" data-input="key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
           <button class="link-btn small" data-act="show">${this.show ? 'Hide' : 'Show'}</button></div>
       </div>
       <div class="tiles"><button class="btn secondary" data-act="paste">Paste</button><button class="btn primary short" data-act="save" ${this.testing ? 'disabled' : ''}>${this.testing ? '<span class="spinner dark"></span>' : 'Save & test'}</button></div>
