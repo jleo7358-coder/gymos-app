@@ -13,6 +13,10 @@ import {
 import { esc, fmt, ORDERED_WEEKDAYS, weekdayName, minutesToTimeInput, timeInputToMinutes } from '../util.js';
 import { BodyScreen, heightText } from './body.js';
 import { RoutineListScreen } from './workout.js';
+import * as FoodDB from '../food/store.js';
+import { GoalsScreen, AISettingsScreen } from './foodmore.js';
+import * as Goals from '../food/goals.js';
+import { hasRealFood } from '../food/demo.js';
 
 export class ProfileScreen extends Screen {
   constructor() {
@@ -27,6 +31,8 @@ export class ProfileScreen extends Screen {
       delete: () => nav.push(new DataDeleteScreen()),
       demo: () => nav.push(new DemoScreen()),
       about: () => nav.push(new AboutScreen()),
+      foodGoals: () => nav.push(new GoalsScreen()),
+      aiSettings: () => nav.push(new AISettingsScreen()),
     });
   }
   render() {
@@ -43,6 +49,12 @@ export class ProfileScreen extends Screen {
         ${ORDERED_WEEKDAYS.map((wd) => { const r = routines.find((x) => x.weekday === wd); return `<div class="list-row"><span class="wd short">${weekdayName(wd, true)}</span><span class="grow ${r ? '' : 'faint'}">${esc(r ? r.name : 'Rest')}</span>${r && r.reminderEnabled ? `<span class="caption faint">${fmt.reminderTime(r.reminderMinutes)}</span>` : ''}</div>`; }).join('')}
         <button class="list-row" data-act="routines"><span class="grow">Edit routines</span>${icon.chevron}</button>
         <button class="list-row" data-act="reminders"><span class="grow">Reminders</span>${icon.chevron}</button>
+      </div>
+
+      <div class="section-label">Nutrition</div>
+      <div class="list grouped">
+        <button class="list-row" data-act="foodGoals"><span class="grow">Goals & targets</span><span class="faint num">${FoodDB.isAvailable() ? `${fmt.integer(Goals.compute().targets.kcal)} kcal` : ''}</span>${icon.chevron}</button>
+        <button class="list-row" data-act="aiSettings"><span class="grow">AI food recognition</span><span class="faint">${FoodDB.isAvailable() && FoodDB.getKV('gemini.key', '') ? 'On' : 'Not set up'}</span>${icon.chevron}</button>
       </div>
 
       <div class="section-label">App</div>
@@ -176,6 +188,7 @@ class BackupScreen extends Screen {
       createLocal: async () => { try { await Backup.createLocalBackup('manual'); this.note('Local backup created.'); } catch (e) { this.note(e.message, true); } },
       csvWorkouts: () => saveFile('GymOS-workouts.csv', Backup.workoutsCSV(), 'text/csv').then(() => this.note('CSV exported.')),
       csvStats: () => saveFile('GymOS-personal-stats.csv', Backup.bodyStatsCSV(), 'text/csv').then(() => this.note('CSV exported.')),
+      csvFood: () => saveFile('GymOS-food-log.csv', Backup.foodLogCSV(), 'text/csv').then(() => this.note('CSV exported.')),
       importCsv: () => this.importCsv(),
     });
   }
@@ -231,7 +244,7 @@ class BackupScreen extends Screen {
         <button class="list-row accent" data-act="export">${icon.share}<span>Export backup (.gymbackup)</span></button>
         <button class="list-row accent" data-act="import">${icon.download}<span>Import backup…</span></button>
       </div>
-      <div class="caption faint">A file containing all workouts, exercises, routines, personal stats, PR history and settings. Works with the iPhone app’s .gymbackup files in both directions. ${last ? `Last exported ${esc(fmt.dayMonthYear(last))}.` : 'Not exported yet.'} Choose “Save to Files” in the share sheet.</div>
+      <div class="caption faint">A file containing all workouts, exercises, routines, personal stats, PR history, settings and your food log (not the AI key). Works with the iPhone app’s .gymbackup files in both directions — the iPhone app ignores the food log, and importing an iPhone backup leaves your food log as it is. ${last ? `Last exported ${esc(fmt.dayMonthYear(last))}.` : 'Not exported yet.'} Choose “Save to Files” in the share sheet.</div>
 
       <div class="section-label">Local backups (${Backup.RETAINED_BACKUPS} most recent kept)</div>
       <div class="list grouped">
@@ -247,6 +260,7 @@ class BackupScreen extends Screen {
       <div class="list grouped">
         <button class="list-row accent" data-act="csvWorkouts"><span>Export workouts as CSV</span></button>
         <button class="list-row accent" data-act="csvStats"><span>Export personal stats as CSV</span></button>
+        <button class="list-row accent" data-act="csvFood"><span>Export food log as CSV</span></button>
         <button class="list-row accent" data-act="importCsv"><span>Import a GymOS CSV…</span></button>
       </div>
       <div class="caption faint">CSV import adds workouts or personal stats exported by GymOS (iPhone or web) without replacing anything. Prefer the .gymbackup file — it also carries routines, exercises and records.</div>
@@ -266,7 +280,11 @@ const CATEGORIES = [
   ['prHistory', 'PR history', 'Detected personal records.'],
   ['backups', 'Local backups', 'Backup files stored inside the app.'],
   ['settings', 'App settings', 'Increments, rest defaults, reminder settings and widget position.'],
+  ['foodLog', 'Food log', 'Every logged food, meal entry and water amount.'],
+  ['foods', 'My foods & meals', 'Custom foods, scanned/online products saved on the phone and saved meals.'],
+  ['foodGoals', 'Nutrition goals & AI key', 'Goal settings, custom targets and the Gemini API key.'],
 ];
+const FOOD_STORES = { foodLog: ['entries', 'days'], foods: ['foods', 'meals'] };
 const STORE_FOR = { workouts: 'sessions', exercises: 'exercises', routines: 'routines', personalStats: 'bodyStats', prHistory: 'prs' };
 
 function inventory() {
@@ -279,6 +297,12 @@ function inventory() {
   }
   out.backups = { count: Backup.localBackups().length, bytes: Backup.backupsSize() };
   out.settings = { count: 1, bytes: new Blob([JSON.stringify(DB.settings())]).size };
+  for (const [k, stores] of Object.entries(FOOD_STORES)) {
+    const arr = stores.flatMap((st) => [...FoodDB.state[st].values()]);
+    out[k] = { count: arr.length, bytes: arr.length ? new Blob([JSON.stringify(arr)]).size : 0 };
+  }
+  const kv = [...FoodDB.state.kv.entries()];
+  out.foodGoals = { count: kv.length, bytes: kv.length ? new Blob([JSON.stringify(kv)]).size : 0 };
   return out;
 }
 
@@ -303,7 +327,7 @@ class StorageScreen extends Screen {
   }
   render() {
     const inv = inventory();
-    const db = Object.entries(inv).filter(([k]) => STORE_FOR[k]).reduce((a, [, v]) => a + v.bytes, 0);
+    const db = Object.entries(inv).filter(([k]) => STORE_FOR[k] || FOOD_STORES[k] || k === 'foodGoals').reduce((a, [, v]) => a + v.bytes, 0);
     const row = (l, b) => `<div class="list-row"><span class="grow">${l}</span><span class="muted num">${esc(fmt.bytes(b))}</span></div>`;
     return `<div class="stack">
       <div class="section-label">Total</div>
@@ -313,7 +337,7 @@ class StorageScreen extends Screen {
       </div>
       <div class="section-label">By category (estimated)</div>
       <div class="list grouped">${CATEGORIES.map(([k, title]) => `<div class="list-row"><span class="grow"><span class="block">${title}</span><span class="caption faint">${inv[k].count} items</span></span><span class="muted num">≈ ${esc(fmt.bytes(inv[k].bytes))}</span></div>`).join('')}</div>
-      <div class="caption faint">Workout history is never removed automatically. ${this.persisted === true ? 'Storage is marked persistent.' : ''}</div>
+      <div class="caption faint">Workout history and the food log are never removed automatically. ${this.persisted === true ? 'Storage is marked persistent.' : ''}</div>
       <div class="list grouped"><button class="list-row accent" data-act="clean"><span>Clean temporary files</span></button></div>
     </div>`;
   }
@@ -345,6 +369,10 @@ class DataDeleteScreen extends Screen {
     await DB.batch(ops);
     if (sel.has('backups')) await Backup.deleteAllLocalBackups();
     if (sel.has('settings')) await DB.resetSettings();
+    const foodOps = [];
+    for (const [k, stores] of Object.entries(FOOD_STORES)) if (sel.has(k)) for (const st of stores) for (const key of FoodDB.state[st].keys()) foodOps.push({ store: st, del: key });
+    if (sel.has('foodGoals')) for (const key of [...FoodDB.state.kv.keys()]) foodOps.push({ store: 'kv', del: key });
+    if (foodOps.length) await FoodDB.batch(foodOps);
     this.message = `Deleted: ${names.join(', ')}.`;
     this.selected = new Set();
     changed();
@@ -374,9 +402,9 @@ class DemoScreen extends Screen {
     });
   }
   render() {
-    const hasDemo = hasDemoData(), hasReal = hasRealData();
+    const hasDemo = hasDemoData(), hasReal = hasRealData() || hasRealFood();
     return `<div class="stack">
-      <div class="card"><div class="sub muted">Loads about five weeks of realistic fake workouts, routines and weekly body stats so every screen can be tested. Demo data is completely separate from real data and is removed by the reset.</div></div>
+      <div class="card"><div class="sub muted">Loads about five weeks of realistic fake workouts, routines and weekly body stats, plus two weeks of food logs, so every screen can be tested. Demo data is completely separate from real data and is removed by the reset.</div></div>
       <div class="list grouped">${hasDemo ? '<button class="list-row destructive" data-act="reset"><span>Reset demo data (delete all fake data)</span></button>'
         : `<button class="list-row accent" data-act="load" ${hasReal ? 'disabled' : ''}><span>Load demo data</span></button>`}</div>
       ${!hasDemo && hasReal ? '<div class="caption faint">Demo data can only be loaded into an empty app, so it never mixes with your real workouts.</div>' : ''}

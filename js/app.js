@@ -10,7 +10,8 @@ import { fmt, esc, clamp } from './util.js';
 import { scheduleChime, cancelChime, chimeNow, unlock, chimeScheduledFor } from './sound.js';
 import { CalendarScreen } from './views/calendar.js';
 import { WorkoutScreen } from './views/workout.js';
-import { HistoryScreen } from './views/history.js';
+import { FoodScreen } from './views/food.js';
+import * as FoodDB from './food/store.js';
 import { BodyScreen } from './views/body.js';
 import { ProfileScreen } from './views/profile.js';
 import { startRest } from './views/common.js';
@@ -18,7 +19,7 @@ import { startRest } from './views/common.js';
 const TABS = [
   { key: 'calendar', label: 'Calendar', icon: 'calendar', make: () => new CalendarScreen() },
   { key: 'workout', label: 'Workout', icon: 'dumbbell', make: () => new WorkoutScreen() },
-  { key: 'history', label: 'History', icon: 'history', make: () => new HistoryScreen() },
+  { key: 'food', label: 'Food', icon: 'food', make: () => new FoodScreen() },
   { key: 'body', label: 'Body', icon: 'body', make: () => new BodyScreen() },
   { key: 'profile', label: 'Profile', icon: 'person', make: () => new ProfileScreen() },
 ];
@@ -286,6 +287,9 @@ export async function boot() {
     return;
   }
 
+  // Food lives in its own database; if it can't open, workouts still work.
+  try { await FoodDB.open(); } catch (e) { console.error('Food storage unavailable', e); }
+
   installDelegation(document.body);
   initModals(document.getElementById('modals'), () => { renderFloat(); });
 
@@ -311,6 +315,7 @@ export async function boot() {
     if (document.visibilityState === 'hidden') {
       if (Engine.active) DB.setKV('lastActive', Date.now());
       DB.flush();
+      FoodDB.flush();
     } else {
       Rest.clearIfExpired(60);
       // A new day may have started while the app was in the background.

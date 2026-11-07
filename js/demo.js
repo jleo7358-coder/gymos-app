@@ -5,6 +5,7 @@ import * as DB from './db.js';
 import { Q, S, PR, Engine, changed, hasDemoData, routineItems } from './engine.js';
 import { uuid, dayKey, todayKey, startOfWeek, addDays, setTime, weekday } from './util.js';
 import { state } from './db.js';
+import { loadFoodDemo, resetFoodDemo } from './food/demo.js';
 
 function rngFactory(seed) {
   let a = seed >>> 0;
@@ -134,6 +135,7 @@ export async function loadDemo() {
   });
 
   await DB.batch(ops);
+  try { await loadFoodDemo(); } catch (e) { console.error(e); }
   changed();
 }
 
@@ -144,6 +146,7 @@ export async function resetDemo() {
     for (const r of state[store].values()) if (r.isDemo) ops.push({ store, del: r.id });
   }
   await DB.batch(ops);
+  try { await resetFoodDemo(); } catch (e) { console.error(e); }
   DB.demo.active = false;
   DB.demo.toolsHidden = true;
   changed();

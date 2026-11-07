@@ -16,6 +16,7 @@ import { parseRoutineText, cleanName } from '../parser.js';
 import {
   setRow, installSetActions, startRest, SessionDetailScreen, ExercisePickerSheet, ExtraPickerSheet,
 } from './common.js';
+import { HistoryScreen } from './history.js';
 
 // ---------------------------------------------------------------------------------
 // Root: home or live workout
@@ -30,6 +31,7 @@ export class WorkoutScreen extends Screen {
       extra: () => presentSheet(new ExtraPickerSheet(todayKey())),
       viewSession: (el) => nav.push(new SessionDetailScreen(el.dataset.id)),
       routines: () => nav.push(new RoutineListScreen()),
+      history: () => nav.push(new HistoryScreen()),
       exercises: () => nav.push(new ExerciseListScreen()),
       parser: () => nav.push(new ParserImportScreen()),
       // live workout
@@ -98,6 +100,7 @@ export class WorkoutScreen extends Screen {
       </div>
       ${prs.length ? `<div class="card"><div class="tag completed">NEW BEST</div>${prs.map((p) => `<div class="row-between"><span class="sub">${esc(p.name)}</span><span class="sub strong num">${esc(setSummary(p.weight, p.reps))}</span></div>`).join('')}</div>` : ''}
       <div class="list grouped">
+        <button class="list-row" data-act="history">${icon.history}<span class="grow">History</span><span class="faint">${Q.sessions().filter((x) => x.status !== 'active').length}</span>${icon.chevron}</button>
         <button class="list-row" data-act="routines">${icon.list}<span class="grow">Routines</span><span class="faint">${routineCount}</span>${icon.chevron}</button>
         <button class="list-row" data-act="exercises">${icon.strength}<span class="grow">Exercises</span><span class="faint">${exerciseCount}</span>${icon.chevron}</button>
         <button class="list-row" data-act="parser">${icon.text}<span class="grow">Add routine from text</span>${icon.chevron}</button>

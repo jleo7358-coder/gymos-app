@@ -6,8 +6,10 @@ import { state } from './db.js';
 import { Q, S, Engine, PR, Routines, changed, orderedSets, routineItems, routineTotalSets } from './engine.js';
 import { lzfseDecode, lzfseStore } from './lzfse.js';
 import { uuid, dayKey, parseDay, setTime, pad2, weekday, addDays, todayKey, norm, fmt } from './util.js';
+import * as FoodDB from './food/store.js';
+import { entryTotals, mealLabel } from './food/nutrients.js';
 
-export const APP_VERSION = '1.0 (web)';
+export const APP_VERSION = '1.1 (web)';
 const MAGIC = [0x47, 0x59, 0x4d, 0x42]; // "GYMB"
 const FORMAT_VERSION = 1;
 export const RETAINED_BACKUPS = 2;
@@ -60,11 +62,38 @@ export function buildPayload() {
       pw: p.prevWeight, pr: int(p.prevReps), sid: p.sessionId || undefined, k: p.kind, d: !!p.isDemo,
     })),
     settings: DB.exportSettingsDictionary(),
+    // Food log (web app only). The iPhone app ignores this key; the Gemini API key is never included.
+    food: foodSection(),
   };
 }
 
+function foodSection() {
+  if (!FoodDB.isAvailable()) return undefined;
+  const s = FoodDB.state;
+  return {
+    v: 1,
+    foods: [...s.foods.values()],
+    entries: [...s.entries.values()],
+    meals: [...s.meals.values()],
+    days: [...s.days.values()],
+    profile: FoodDB.getKV('profile', null),
+  };
+}
+
+async function importFood(f) {
+  if (!f || typeof f !== 'object' || !FoodDB.isAvailable()) return false;
+  const arr = (x) => (Array.isArray(x) ? x.filter((r) => r && typeof r === 'object') : []);
+  await FoodDB.replaceStores({
+    foods: arr(f.foods).filter((r) => r.id), entries: arr(f.entries).filter((r) => r.id && r.day),
+    meals: arr(f.meals).filter((r) => r.id), days: arr(f.days).filter((r) => r.day),
+  });
+  if (f.profile && typeof f.profile === 'object') await FoodDB.setKV('profile', f.profile);
+  return true;
+}
+
 export function payloadSummary(p) {
-  return `${p.sessions.length} workouts · ${p.exercises.length} exercises · ${p.routines.length} routines · ${p.bodyStats.length} stat entries`;
+  const food = p.food && Array.isArray(p.food.entries) ? ` · ${p.food.entries.length} food entries` : '';
+  return `${p.sessions.length} workouts · ${p.exercises.length} exercises · ${p.routines.length} routines · ${p.bodyStats.length} stat entries${food}`;
 }
 
 function recordsFromPayload(p) {
@@ -193,6 +222,8 @@ export async function importReplacing(bytes) {
   await DB.replaceAllData(recordsFromPayload(payload));
   DB.demo.active = !!payload.demoActive;
   await DB.applySettingsDictionary(payload.settings || {});
+  // Backups without a food section (e.g. from the iPhone app) leave the food log untouched.
+  if (payload.food) await importFood(payload.food);
   changed();
   return payload;
 }
@@ -215,6 +246,22 @@ export function workoutsCSV() {
     }
   }
   return lines.join('\n');
+}
+
+export function foodLogCSV() {
+  const lines = ['date,time,meal,food,brand,amount,unit,kcal,protein_g,carbs_g,fat_g,fibre_g,sugars_g,sat_fat_g,salt_g,source'];
+  const entries = [...FoodDB.state.entries.values()].sort((a, b) => (a.day === b.day ? (a.ts || 0) - (b.ts || 0) : a.day < b.day ? -1 : 1));
+  const n = (v, d = 1) => (v == null ? '' : Number(v).toFixed(d));
+  for (const e of entries) {
+    const t = entryTotals(e);
+    const d = new Date(e.ts || 0);
+    lines.push([e.day, `${pad2(d.getHours())}:${pad2(d.getMinutes())}`, mealLabel(e.meal), csvField(e.name), csvField(e.brand || ''),
+      n(e.qty, 2), e.basis === 'portion' ? 'portion' : (e.unit || 'g'), n(t.kcal, 0), n(t.protein), n(t.carbs), n(t.fat), n(t.fibre), n(t.sugars), n(t.satFat), n(t.salt, 2), e.source || ''].join(','));
+  }
+  for (const day of [...FoodDB.state.days.values()].filter((x) => x.waterMl).sort((a, b) => (a.day < b.day ? -1 : 1))) {
+    lines.push([day.day, '', 'Water', 'Water', '', day.waterMl, 'ml', '', '', '', '', '', '', '', '', 'water'].join(','));
+  }
+  return lines.join('\n') + '\n';
 }
 
 export function bodyStatsCSV() {

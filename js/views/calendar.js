@@ -5,6 +5,10 @@ import { nav, Screen } from '../nav.js';
 import { View, icon, pill, presentSheet, sheetHeader, dismissAll } from '../ui.js';
 import { esc, fmt, dayKey, todayKey, startOfMonth, addMonths, endOfMonth, weekday, ORDERED_WEEKDAYS, weekdayName, parseDay } from '../util.js';
 import { sessionCard, ExtraPickerSheet, SessionDetailScreen, openSessionFromSheet } from './common.js';
+import { F } from '../food/nutrients.js';
+import { targetsFor } from '../food/goals.js';
+import { isAvailable as foodAvailable } from '../food/store.js';
+import { openFoodDay } from './food.js';
 
 const MONTHS_BACK = 24, MONTHS_FORWARD = 12;
 
@@ -87,7 +91,19 @@ class DayDetailSheet extends View {
         nav.switchTab('workout', true);
       },
       extra: () => presentSheet(new ExtraPickerSheet(this.key)),
+      food: () => { dismissAll(); openFoodDay(this.key); },
     };
+  }
+  foodCard() {
+    if (!foodAvailable() || this.key > todayKey()) return '';
+    const n = F.entriesOn(this.key).length;
+    const water = F.water(this.key);
+    if (!n && !water && this.key !== todayKey()) return '';
+    const t = F.dayTotals(this.key);
+    const T = targetsFor(this.key);
+    const line = n ? `${fmt.integer(t.kcal || 0)} / ${fmt.integer(T.kcal)} kcal · P ${fmt.integer(t.protein || 0)} g` : 'Nothing logged yet';
+    return `<button class="card card-btn" data-act="food"><div class="row-between"><div class="row-left"><span class="tag active">FOOD</span><span class="sub num">${esc(line)}</span></div>${icon.chevron}</div>
+      ${water ? `<div class="caption faint num">Water ${fmt.number(water / 1000, 2)} L · ${n} item${n === 1 ? '' : 's'}</div>` : ''}</button>`;
   }
   render() {
     const info = Calendar.info(this.key);
@@ -109,7 +125,7 @@ class DayDetailSheet extends View {
     return `<div class="sheet-header"><span class="link-btn"></span><div class="sheet-title"></div><button class="link-btn strong" data-act="done">Done</button></div>
       <div class="stack">
         <div class="row-between"><span class="headline">${esc(fmt.fullDate(this.key))}</span>${pill(kind.label, info.kind)}</div>
-        ${gym}${extras}
+        ${gym}${extras}${this.foodCard()}
         <div class="stack-tight">
           ${isToday && info.kind === 'planned' && info.routine ? `<button class="btn primary" data-act="start" ${busy ? 'disabled' : ''}>START WORKOUT</button>` : ''}
           <button class="btn secondary" data-act="extra" ${busy ? 'disabled' : ''}>${isPast ? 'LOG EXTRA WORKOUT' : 'START EXTRA WORKOUT'}</button>

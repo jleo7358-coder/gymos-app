@@ -1,23 +1,30 @@
 // Offline support: every app file is cached on install, so GymOS opens and works with no
 // connection at all. A new version is picked up the next time the app is opened online.
 
-const VERSION = "18c49519cea4";
+const VERSION = "d304c69a7ad6";
 const CACHE = `gymos-app-${VERSION}`;
 const ASSETS = [
   "./",
-  "./index.html",
-  "./manifest.webmanifest",
   "./css/app.css",
   "./icons/apple-touch-icon.png",
   "./icons/favicon-32.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-512.png",
+  "./index.html",
   "./js/app.js",
   "./js/backup.js",
   "./js/db.js",
   "./js/demo.js",
   "./js/engine.js",
+  "./js/food/ai.js",
+  "./js/food/demo.js",
+  "./js/food/goals.js",
+  "./js/food/log.js",
+  "./js/food/nutrients.js",
+  "./js/food/off.js",
+  "./js/food/scan.js",
+  "./js/food/store.js",
   "./js/lzfse.js",
   "./js/nav.js",
   "./js/parser.js",
@@ -27,9 +34,15 @@ const ASSETS = [
   "./js/views/body.js",
   "./js/views/calendar.js",
   "./js/views/common.js",
+  "./js/views/food.js",
+  "./js/views/foodadd.js",
+  "./js/views/foodmore.js",
+  "./js/views/foodui.js",
   "./js/views/history.js",
   "./js/views/profile.js",
-  "./js/views/workout.js"
+  "./js/views/workout.js",
+  "./manifest.webmanifest",
+  "./vendor/html5-qrcode.min.js"
 ];
 
 self.addEventListener('install', (event) => {
