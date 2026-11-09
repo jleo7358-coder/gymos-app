@@ -14,12 +14,20 @@ export const ACTIVITY = [
   [1.9, 'Extremely active', 'Physical job plus hard training'],
 ];
 export const GOALS = [['lose', 'Lose fat'], ['maintain', 'Maintain'], ['gain', 'Build muscle']];
-export const RATES = [0.25, 0.5, 0.75, 1];
+export const RATES = [0.1, 0.25, 0.5, 0.75, 1];
 const KCAL_PER_KG = 7700;
+
+/** Diet-style fields a preset can set (see diets.js). */
+export const DIET_DEFAULTS = {
+  macroMode: 'perkg', proteinPerKg: 1.8, fatPct: 25, carbCap: 100, pct: { protein: 30, carbs: 40, fat: 30 },
+  fibre: 30, sugarLimit: 90, satFatPct: 10, saltLimit: 6, nutrients: {}, window: null,
+};
+export const MACRO_MODES = [['perkg', 'Protein per kg + fat %'], ['carbcap', 'Fixed carbs (low carb / keto)'], ['percent', 'Percent split']];
 
 export const DEFAULT_PROFILE = {
   sex: null, activity: 1.55, goal: 'maintain', rate: 0.5,
-  proteinPerKg: 1.8, fatPct: 25,
+  ...DIET_DEFAULTS, diet: 'balanced',
+  targetWeightKg: null, targetDate: null, startWeightKg: null, startDate: null,
   adaptive: true, cycling: false, cycleKcal: 200, useBodyFat: true,
   manual: { weightKg: null, heightCm: null, age: null },
   overrides: {}, waterMl: null, waterTrainingMl: 500,
@@ -27,7 +35,10 @@ export const DEFAULT_PROFILE = {
 
 export function profile() {
   const p = getKV('profile', {}) || {};
-  return { ...DEFAULT_PROFILE, ...p, manual: { ...DEFAULT_PROFILE.manual, ...(p.manual || {}) }, overrides: { ...(p.overrides || {}) } };
+  return {
+    ...DEFAULT_PROFILE, ...p, manual: { ...DEFAULT_PROFILE.manual, ...(p.manual || {}) }, overrides: { ...(p.overrides || {}) },
+    pct: { ...DIET_DEFAULTS.pct, ...(p.pct || {}) }, nutrients: { ...(p.nutrients || {}) },
+  };
 }
 export function updateProfile(patch) { return setKV('profile', { ...profile(), ...patch }); }
 export const isConfigured = () => !!getKV('profile', null) && !!profile().sex;
@@ -131,7 +142,9 @@ export function compute(day = todayKey(), p = profile()) {
   const formula = B ? B.value * p.activity : null;
   const adaptive = adaptiveTDEE(formula, todayKey());
   const tdee = formula == null ? null : (p.adaptive && adaptive.ready ? formula + (adaptive.value - formula) * adaptive.confidence : formula);
-  const delta = p.goal === 'lose' ? -p.rate * KCAL_PER_KG / 7 : p.goal === 'gain' ? p.rate * KCAL_PER_KG / 7 : 0;
+  const plan = weightPlan(p, body);
+  const rate = plan.rate;
+  const delta = p.goal === 'lose' ? -rate * KCAL_PER_KG / 7 : p.goal === 'gain' ? rate * KCAL_PER_KG / 7 : 0;
   const floor = p.sex === 'male' ? 1500 : 1200;
   let base = tdee == null ? 2000 : tdee + delta;
   const floored = base < floor;
@@ -150,24 +163,68 @@ export function compute(day = todayKey(), p = profile()) {
   kcal = round(kcal, 10);
 
   const weight = body.weightKg || 75;
-  const targets = { kcal };
-  targets.protein = ov.protein ?? round(p.proteinPerKg * weight);
-  targets.fat = ov.fat ?? round((p.fatPct / 100) * kcal / 9);
-  targets.carbs = ov.carbs ?? Math.max(0, round((kcal - targets.protein * 4 - targets.fat * 9) / 4));
-  targets.fibre = ov.fibre ?? 30;
-  targets.sugars = ov.sugars ?? 90;
-  targets.satFat = ov.satFat ?? round(kcal * 0.1 / 9);
-  targets.salt = ov.salt ?? 6;
-  for (const n of NUTRIENTS) if (n.nrv != null) targets[n.key] = ov[n.key] ?? n.nrv;
+  const targets = { kcal, ...macroTargets(p, kcal, weight) };
+  for (const k of ['protein', 'carbs', 'fat']) if (ov[k] != null) targets[k] = ov[k];
+  targets.fibre = ov.fibre ?? p.fibre;
+  targets.sugars = ov.sugars ?? p.sugarLimit;
+  targets.satFat = ov.satFat ?? round(kcal * (p.satFatPct / 100) / 9);
+  targets.salt = ov.salt ?? p.saltLimit;
+  for (const n of NUTRIENTS) if (n.nrv != null) targets[n.key] = ov[n.key] ?? (p.nutrients[n.key] ?? n.nrv);
   const waterBase = p.waterMl ?? round(35 * weight, 50);
   targets.water = waterBase + (training ? (p.waterTrainingMl || 0) : 0);
 
   return {
     day, body, bmr: B, formulaTDEE: formula, adaptive, tdee, delta, floored, floor, training, trainingDays: T,
-    trainKcal: round(trainKcal, 10), restKcal: round(restKcal, 10), baseKcal: round(base, 10), targets,
+    trainKcal: round(trainKcal, 10), restKcal: round(restKcal, 10), baseKcal: round(base, 10), targets, plan,
     bmi: bmi(body.weightKg, body.heightCm), hasBody: !!(body.weightKg && body.heightCm && body.age != null),
   };
 }
 
 export const targetsFor = (day) => compute(day).targets;
+
+/** Protein / carbs / fat in grams for a calorie target under the profile's macro method. */
+export function macroTargets(p, kcal, weight) {
+  if (p.macroMode === 'percent') {
+    const t = (p.pct.protein || 0) + (p.pct.carbs || 0) + (p.pct.fat || 0) || 100;
+    return {
+      protein: round((kcal * (p.pct.protein / t)) / 4), carbs: round((kcal * (p.pct.carbs / t)) / 4), fat: round((kcal * (p.pct.fat / t)) / 9),
+    };
+  }
+  const protein = round(p.proteinPerKg * weight);
+  if (p.macroMode === 'carbcap') {
+    const carbs = round(p.carbCap);
+    return { protein, carbs, fat: Math.max(30, round((kcal - protein * 4 - carbs * 4) / 9)) };
+  }
+  const fat = round((p.fatPct / 100) * kcal / 9);
+  return { protein, fat, carbs: Math.max(0, round((kcal - protein * 4 - fat * 9) / 4)) };
+}
+
+/**
+ * Target weight plan: the weekly rate actually used (from a target date when set, kept within
+ * safe limits), progress and the estimated finish date.
+ */
+export function weightPlan(p, body = bodyInputs(p)) {
+  const w = body.weightKg;
+  const out = { rate: p.rate, target: p.targetWeightKg, current: w, start: p.startWeightKg, byDate: false, capped: false, eta: null, toGo: null, progress: null, mismatch: false, reached: false };
+  if (p.goal === 'maintain' || !p.targetWeightKg || !w) return out;
+  const diff = p.targetWeightKg - w; // negative = need to lose
+  out.toGo = Math.abs(diff);
+  out.mismatch = (p.goal === 'lose' && diff > 0.05) || (p.goal === 'gain' && diff < -0.05);
+  out.reached = !out.mismatch && Math.abs(diff) < 0.3;
+  const maxRate = p.goal === 'lose' ? Math.max(0.25, Math.min(1, w * 0.01)) : 0.75;
+  if (p.targetDate && !out.mismatch && !out.reached) {
+    const weeks = Math.max(1, (parseDay(p.targetDate) - parseDay(todayKey())) / (7 * MS_DAY));
+    const need = Math.abs(diff) / weeks;
+    out.byDate = true;
+    out.rate = Math.min(maxRate, Math.max(0.05, need));
+    out.capped = need > maxRate;
+  }
+  if (!out.mismatch && !out.reached && out.rate > 0) {
+    out.eta = Date.now() + (Math.abs(diff) / out.rate) * 7 * MS_DAY;
+  }
+  if (p.startWeightKg != null && Math.abs(p.startWeightKg - p.targetWeightKg) > 0.05) {
+    out.progress = clamp((p.startWeightKg - w) / (p.startWeightKg - p.targetWeightKg), 0, 1);
+  }
+  return out;
+}
 export const kindOf = (key) => (N[key] ? N[key].kind : 'target');

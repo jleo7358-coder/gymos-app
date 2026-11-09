@@ -8,6 +8,7 @@ import { changed, Q } from '../engine.js';
 import { state, getKV } from '../food/store.js';
 import { NUTRIENTS, N, GROUPS, MEALS, F, fmtN, entryTotals, coverage, averageTotals, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
+import * as Diets from '../food/diets.js';
 import * as Log from '../food/log.js';
 import { ai, discoverModels, analyse, AIError } from '../food/ai.js';
 import { bar, NumberSheet, SheetView, macroLine } from './foodui.js';
@@ -44,13 +45,45 @@ export class GoalsScreen extends Screen {
       micros: () => { this.showMicros = !this.showMicros; nav.refresh(); },
       resetOverrides: () => confirm('Reset all custom targets?', 'Every target goes back to the calculated value.', 'Reset', () => upd({ overrides: {} })),
       calc: () => nav.push(new BodyCalcScreen()),
+      diets: () => nav.push(new DietPresetsScreen()),
+      targetWeight: () => {
+        const p = Goals.profile(); const w = Goals.bodyInputs(p).weightKg;
+        presentSheet(new NumberSheet({
+          title: 'Target weight', value: p.targetWeightKg, unit: 'kg', allowClear: p.targetWeightKg != null, clearLabel: 'Remove target',
+          hint: w ? `You weigh ${fmt.kg(w)} now (latest Body check-in).` : 'Add a weekly check-in in the Body tab so progress can be tracked.',
+          onDone: (v) => {
+            if (v == null) { upd({ targetWeightKg: null, targetDate: null, startWeightKg: null, startDate: null }); return; }
+            if (v < 30 || v > 300) { toast('Enter a weight between 30 and 300 kg'); return; }
+            const patch = { targetWeightKg: v, startWeightKg: w ?? null, startDate: todayKey() };
+            // Point the goal the right way if it doesn't match the target.
+            if (w && v < w - 0.2 && Goals.profile().goal !== 'lose') patch.goal = 'lose';
+            if (w && v > w + 0.2 && Goals.profile().goal !== 'gain') patch.goal = 'gain';
+            upd(patch);
+          },
+        }));
+      },
+      clearDate: () => upd({ targetDate: null }),
+      carbCap: (el) => { const p = Goals.profile(); upd({ carbCap: clamp(p.carbCap + (p.carbCap < 50 ? 5 : 10) * Number(el.dataset.d), 10, 400) }); },
+      pct: (el) => {
+        const p = Goals.profile(); const k = el.dataset.k; const pct = { ...p.pct };
+        pct[k] = clamp(pct[k] + 5 * Number(el.dataset.d), 5, 80);
+        pct.carbs = 100 - pct.protein - pct.fat;
+        if (pct.carbs < 5) return;
+        upd({ pct });
+      },
+      window: () => { const p = Goals.profile(); upd({ window: p.window ? null : { start: '12:00', end: '20:00' } }); },
     });
     this.changes = {
+      targetDate: (el) => upd({ targetDate: el.value || null }),
+      macroMode: (el) => upd({ macroMode: el.value }),
+      winStart: (el) => { const p = Goals.profile(); upd({ window: { ...(p.window || {}), start: el.value || '12:00' } }); },
+      winEnd: (el) => { const p = Goals.profile(); upd({ window: { ...(p.window || {}), end: el.value || '20:00' } }); },
       activity: (el) => upd({ activity: Number(el.value) }),
       rate: (el) => upd({ rate: Number(el.value) }),
       adaptive: (el) => upd({ adaptive: el.checked }),
       cycling: (el) => upd({ cycling: el.checked }),
       useBF: (el) => upd({ useBodyFat: el.checked }),
+      windowToggle: () => this.actions.window(),
     };
   }
   editTarget(k) {
@@ -90,16 +123,39 @@ export class GoalsScreen extends Screen {
         <div class="row"><span class="caption faint">${esc((Goals.ACTIVITY.find(([v]) => v === p.activity) || [0, '', ''])[2])}</span></div>
       </div>
       <div class="segmented">${Goals.GOALS.map(([v, l]) => `<button class="seg ${p.goal === v ? 'on' : ''}" data-act="goal" data-v="${v}">${l}</button>`).join('')}</div>
-      ${p.goal !== 'maintain' ? `<div class="list grouped form"><label class="row"><span class="row-label grow">${p.goal === 'lose' ? 'Lose' : 'Gain'} per week</span><select class="select" data-change="rate">${Goals.RATES.map((r) => `<option value="${r}" ${p.rate === r ? 'selected' : ''}>${fmt.number(r, 2)} kg (${fmt.integer(r * 7700 / 7)} kcal/day)</option>`).join('')}</select></label></div>
+      ${p.goal !== 'maintain' ? `<div class="list grouped form">${c.plan.byDate ? `<div class="row"><span class="row-label grow">${p.goal === 'lose' ? 'Lose' : 'Gain'} per week</span><span class="muted num">${fmt.number(c.plan.rate, 2)} kg · set by your date</span></div>` : `<label class="row"><span class="row-label grow">${p.goal === 'lose' ? 'Lose' : 'Gain'} per week</span><select class="select" data-change="rate">${Goals.RATES.map((r) => `<option value="${r}" ${p.rate === r ? 'selected' : ''}>${fmt.number(r, 2)} kg (${fmt.integer(r * 7700 / 7)} kcal/day)</option>`).join('')}</select></label>`}</div>
         ${p.goal === 'gain' && p.rate > 0.5 ? '<div class="caption text-partial">Above ~0.5 kg a week most extra weight is fat. 0.25–0.5 kg suits a lean bulk.</div>' : ''}
-        ${p.goal === 'lose' && b.weightKg && p.rate > b.weightKg * 0.01 ? '<div class="caption text-partial">More than 1% of body weight a week makes it hard to keep muscle.</div>' : ''}` : ''}`;
+        ${p.goal === 'lose' && b.weightKg && p.rate > b.weightKg * 0.01 ? '<div class="caption text-partial">More than 1% of body weight a week makes it hard to keep muscle.</div>' : ''}` : ''}
+        <div class="list grouped form">
+          <button class="list-row" data-act="targetWeight"><span class="grow">Target weight</span><span class="${p.targetWeightKg ? 'muted' : 'text-active'} num">${p.targetWeightKg ? fmt.kg(p.targetWeightKg) : 'Set'}</span>${icon.chevron}</button>
+          ${p.targetWeightKg ? `<label class="row"><span class="row-label grow">Reach it by<span class="row-sub">Optional — sets the weekly rate for you</span></span><input type="date" class="date-input" value="${p.targetDate || ''}" min="${todayKey()}" data-change="targetDate"></label>
+            ${p.targetDate ? '<button class="list-row accent" data-act="clearDate"><span>Use the weekly rate instead of a date</span></button>' : ''}` : ''}
+        </div>
+        ${p.goal === 'maintain' ? (p.targetWeightKg ? '<div class="caption faint">Set the goal to Lose fat or Build muscle to work towards this target.</div>' : '') : planNote(c.plan, p)}`;
 
+    const proteinStep = stepper(`Protein: ${fmt.number(p.proteinPerKg, 1)} g per kg${b.weightKg ? ` (${fmt.integer(p.proteinPerKg * b.weightKg)} g)` : ''}`, p.proteinPerKg, 'protein', 0.8, 3.3);
+    const pctStep = (k, label) => `<div class="row stepper-row"><span>${label}: ${p.pct[k]}%</span><div class="stepper">
+      <button class="step-btn" data-act="pct" data-k="${k}" data-d="-1" ${p.pct[k] <= 5 ? 'disabled' : ''}>${icon.minus}</button><button class="step-btn" data-act="pct" data-k="${k}" data-d="1">${icon.plus}</button></div></div>`;
+    const macroRows = p.macroMode === 'percent'
+      ? `${pctStep('protein', 'Protein')}${pctStep('fat', 'Fat')}<div class="row"><span class="grow">Carbs: ${p.pct.carbs}%</span><span class="caption faint">the rest</span></div>`
+      : p.macroMode === 'carbcap'
+        ? `${proteinStep}${stepper(`Carbs: ${fmt.integer(p.carbCap)} g a day`, p.carbCap, 'carbCap', 10, 400)}<div class="row"><span class="caption faint">Fat fills the remaining calories.</span></div>`
+        : `${proteinStep}${stepper(`Fat: ${p.fatPct}% of calories`, p.fatPct, 'fatPct', 15, 45)}<div class="row"><span class="caption faint">Carbohydrate fills the remaining calories. 1.6–2.2 g/kg protein suits most people who lift.</span></div>`;
     const macroCard = `<div class="section-label">Macros</div>
       <div class="list grouped form">
-        ${stepper(`Protein: ${fmt.number(p.proteinPerKg, 1)} g per kg${b.weightKg ? ` (${fmt.integer(p.proteinPerKg * b.weightKg)} g)` : ''}`, p.proteinPerKg, 'protein', 0.8, 3.3)}
-        ${stepper(`Fat: ${p.fatPct}% of calories`, p.fatPct, 'fatPct', 15, 45)}
-        <div class="row"><span class="caption faint">Carbohydrate fills the remaining calories. 1.6–2.2 g/kg protein suits most people who lift.</span></div>
+        <label class="row"><span class="row-label grow">Method</span><select class="select small" data-change="macroMode">${Goals.MACRO_MODES.map(([v, l]) => `<option value="${v}" ${p.macroMode === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        ${macroRows}
+        <div class="row"><span class="grow muted">Today</span><span class="num muted">P ${fmt.integer(c.targets.protein)} · C ${fmt.integer(c.targets.carbs)} · F ${fmt.integer(c.targets.fat)} g</span></div>
+      </div>
+      <div class="list grouped form">
+        ${toggle('Eating window (intermittent fasting)', !!p.window, 'windowToggle')}
+        ${p.window ? `<label class="row sub-row"><span class="row-label grow">From</span><input type="time" class="time-input" value="${p.window.start}" data-change="winStart"></label>
+          <label class="row sub-row"><span class="row-label grow">Until</span><input type="time" class="time-input" value="${p.window.end}" data-change="winEnd"></label>` : ''}
       </div>`;
+    const pr = Diets.preset(p.diet);
+    const dietCard = `<div class="section-label">Diet style</div>
+      <div class="list grouped"><button class="list-row" data-act="diets"><span class="grow minw0"><span class="block">${esc(pr ? pr.name : 'Custom')}${pr && Diets.isCustomised(p) ? ' <span class="caption faint">(adjusted)</span>' : ''}</span>
+        <span class="caption faint block clamp2">${esc(pr ? pr.desc : 'Your own settings.')}</span></span><span class="link-btn small">Presets</span>${icon.chevron}</button></div>`;
 
     const T = c.trainingDays;
     const optCard = `<div class="section-label">Options</div>
@@ -117,6 +173,7 @@ export class GoalsScreen extends Screen {
         <div class="tiles">${statTile('BMI', c.bmi ? fmt.number(c.bmi, 1) : '—', band ? band[0] : null)}${statTile('BMR', c.bmr ? fmt.integer(c.bmr.value) : '—', c.bmr ? c.bmr.method : 'needs body stats')}${statTile('Maintenance', c.tdee ? fmt.integer(c.tdee) : '—', 'kcal / day')}</div>
         <div class="list-row slim"><span class="grow muted">Formula maintenance</span><span class="num">${kcal(c.formulaTDEE)}</span></div>
         <div class="list-row slim"><span class="grow muted">Adaptive estimate</span><span class="num caption right">${esc(adaptiveText)}</span></div>
+        ${c.plan.byDate ? `<div class="list-row slim"><span class="grow muted">Rate to reach target by ${esc(fmt.dayMonth(p.targetDate))}</span><span class="num">${fmt.number(c.plan.rate, 2)} kg/week</span></div>` : ''}
         <div class="list-row slim"><span class="grow muted">Goal adjustment</span><span class="num">${c.delta ? `${c.delta > 0 ? '+' : '−'}${fmt.integer(Math.abs(c.delta))} kcal` : '—'}</span></div>
         <div class="list-row slim"><span class="grow strong">Daily calories</span><span class="num strong">${kcal(c.baseKcal)}</span></div>
         ${p.cycling && T && T < 7 && p.overrides.kcal == null ? `<div class="list-row slim"><span class="grow muted">Training / rest days</span><span class="num">${fmt.integer(c.trainKcal)} / ${fmt.integer(c.restKcal)}</span></div>` : ''}
@@ -138,7 +195,56 @@ export class GoalsScreen extends Screen {
       <div class="list grouped"><button class="list-row accent" data-act="calc">${icon.scale}<span class="grow">BMI & body calculator</span>${icon.chevron}</button></div>
       <div class="caption faint">Estimates for healthy adults, not medical advice. Targets update automatically as you log weigh-ins in the Body tab.</div>`;
 
-    return `<div class="stack">${bodyCard}${goalCard}${macroCard}${optCard}${resultCard}${targets}</div>`;
+    return `<div class="stack">${bodyCard}${dietCard}${goalCard}${macroCard}${optCard}${resultCard}${targets}</div>`;
+  }
+}
+
+/** Target-weight progress and warnings (Goals screen). */
+function planNote(plan, p) {
+  if (!plan.target) return '';
+  if (!plan.current) return '<div class="caption faint">Add a weigh-in in the Body tab to track progress to your target.</div>';
+  if (plan.mismatch) return `<div class="caption text-partial">Your target (${fmt.kg(plan.target)}) is ${plan.target > plan.current ? 'above' : 'below'} your current weight, but the goal is to ${p.goal === 'lose' ? 'lose' : 'gain'}. Change the goal or the target.</div>`;
+  if (plan.reached) return '<div class="caption text-completed">Target reached. Switch to Maintain, or set a new target.</div>';
+  const pctDone = plan.progress != null ? `<div class="nbar-track"><div class="nbar-fill ok" style="width:${(plan.progress * 100).toFixed(1)}%"></div></div>
+    <div class="row-between caption faint num"><span>Start ${fmt.kg(plan.start)}</span><span>Now ${fmt.kg(plan.current)}</span><span>Target ${fmt.kg(plan.target)}</span></div>` : '';
+  return `<div class="card">${pctDone}
+    <div class="sub num">${fmt.number(plan.toGo, 1)} kg to ${p.goal === 'lose' ? 'lose' : 'gain'} · about ${fmt.integer(plan.toGo / plan.rate)} weeks${plan.eta ? ` (${fmt.dayMonthYear(plan.eta)})` : ''}</div>
+    ${plan.capped ? `<div class="caption text-partial">That date needs more than a safe rate, so it's capped at ${fmt.number(plan.rate, 2)} kg a week. The estimated finish date is shown instead.</div>` : ''}</div>`;
+}
+
+// ---------------------------------------------------------------------------------
+// Diet style presets
+
+export class DietPresetsScreen extends Screen {
+  constructor() {
+    super('Diet style');
+    this.actions.pick = (el) => {
+      const pr = Diets.preset(el.dataset.k); if (!pr) return;
+      const p = Goals.profile();
+      const hasOv = ['protein', 'carbs', 'fat', 'fibre', 'sugars', 'satFat', 'salt'].some((k) => p.overrides[k] != null);
+      const goalText = pr.set.goal ? ` Your goal becomes ${pr.set.goal === 'lose' ? 'lose' : 'gain'} ${fmt.number(pr.set.rate, 2)} kg a week.` : ' Your current goal stays the same.';
+      confirm(`Use “${pr.name}”?`, `${pr.desc}${goalText}${hasOv ? ' Your custom macro targets are replaced.' : ''}`, 'Use it', () => {
+        Diets.applyPreset(pr.key); changed(); nav.pop(); toast(`Diet style: ${pr.name}`, 'good');
+      }, false);
+    };
+  }
+  render() {
+    const p = Goals.profile();
+    const card = (pr) => {
+      const c = Goals.compute(todayKey(), Diets.withPreset(p, pr.key));
+      const on = p.diet === pr.key;
+      const goal = pr.set.goal ? `${pr.set.goal === 'lose' ? '−' : '+'}${fmt.number(pr.set.rate, 2)} kg/wk` : 'any goal';
+      return `<button class="card card-btn diet ${on ? 'on' : ''}" data-act="pick" data-k="${pr.key}">
+        <div class="row-between"><span class="sub strong">${esc(pr.name)}</span>${on ? pill('CURRENT', 'active') : `<span class="caption faint">${goal}</span>`}</div>
+        <div class="caption muted">${esc(pr.desc)}</div>
+        <div class="diet-macros num"><span><b>${fmt.integer(c.targets.kcal)}</b> kcal</span><span>P <b>${fmt.integer(c.targets.protein)}</b></span><span>C <b>${fmt.integer(c.targets.carbs)}</b></span><span>F <b>${fmt.integer(c.targets.fat)}</b> g</span></div>
+      </button>`;
+    };
+    return `<div class="stack">
+      <div class="caption muted">Each preset sets your macros and nutrient limits; cut and bulk styles also set your goal. Numbers are for you today. You can fine-tune anything afterwards.</div>
+      ${Diets.GROUPS.map(([g, title]) => `<div class="section-label">${title}</div>${Diets.PRESETS.filter((x) => x.group === g).map(card).join('')}`).join('')}
+      <div class="caption faint">Estimates for healthy adults, not medical advice. Very low-carb, aggressive cuts and DASH for blood pressure are best done with a doctor if you have a health condition.</div>
+    </div>`;
   }
 }
 

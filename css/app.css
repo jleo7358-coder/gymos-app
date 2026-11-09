@@ -474,3 +474,9 @@ body.rest-flash #app::after { content: ""; position: fixed; inset: 0; pointer-ev
 .bmi-ticks { position: relative; height: 16px; }
 .bmi-ticks span { position: absolute; transform: translateX(-50%); }
 .pre-line { white-space: pre-line; }
+.goal-line { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: -2px; }
+.dotsep { color: var(--text3); }
+.diet { gap: 6px; }
+.diet.on { border-color: rgba(122, 200, 250, 0.55); }
+.diet-macros { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--text2); }
+.diet-macros b { color: var(--text); font-weight: 600; }

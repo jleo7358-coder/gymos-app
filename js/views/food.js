@@ -7,6 +7,7 @@ import * as FS from '../food/store.js';
 import { state } from '../food/store.js';
 import { MEALS, F, fmtN, entryTotals, amountText, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
+import * as Diets from '../food/diets.js';
 import * as Log from '../food/log.js';
 import { ring, bar, NumberSheet, macroLine } from './foodui.js';
 import { AddFoodSheet, FoodAmountSheet, ScanSheet, QuickAddSheet, openAI } from './foodadd.js';
@@ -92,6 +93,26 @@ export class FoodScreen extends Screen {
       items.length ? { label: `Clear ${mealLabel(meal).toLowerCase()}`, icon: 'trash', destructive: true, handler: () => confirm(`Delete ${items.length} item${items.length === 1 ? '' : 's'}?`, `${mealLabel(meal)} · ${fmt.weekdayDayMonth(this.day)}`, 'Delete', () => Log.deleteEntries(items.map((e) => e.id))) } : null,
     ], mealLabel(meal));
   }
+  /** Target-weight progress and the fasting window under the summary. */
+  goalLine(c, day) {
+    const p = Goals.profile();
+    const bits = [];
+    const pl = c.plan;
+    if (pl && pl.target && pl.current && p.goal !== 'maintain') {
+      if (pl.reached) bits.push('<span class="text-completed">Target weight reached</span>');
+      else if (!pl.mismatch) bits.push(`<span>${fmt.number(pl.toGo, 1)} kg to ${fmt.kg(pl.target)}${pl.eta ? ` · ≈ ${esc(fmt.dayMonth(pl.eta))}` : ''}</span>`);
+    }
+    if (p.window && day === todayKey()) {
+      const now = new Date(); const m = now.getHours() * 60 + now.getMinutes();
+      const toMin = (t) => { const [h, mm] = String(t).split(':').map(Number); return h * 60 + (mm || 0); };
+      const a = toMin(p.window.start), b = toMin(p.window.end);
+      const open = a <= b ? m >= a && m < b : m >= a || m < b;
+      bits.push(`<span class="${open ? 'text-completed' : 'muted'}">Eating window ${esc(p.window.start)}–${esc(p.window.end)} · ${open ? 'open' : 'closed'}</span>`);
+    }
+    const pr = p.diet && p.diet !== 'balanced' ? Diets.preset(p.diet) : null;
+    if (pr) bits.unshift(`<span>${esc(pr.name)}</span>`);
+    return bits.length ? `<div class="goal-line caption faint num">${bits.join('<span class="dotsep">·</span>')}</div>` : '';
+  }
   render() {
     if (!FS.isAvailable()) return `<div class="card"><div class="sub text-partial">Food storage couldn't be opened. Close GymOS completely and open it again. Your workouts are not affected.</div></div>`;
     const day = this.day, today = todayKey();
@@ -116,6 +137,7 @@ export class FoodScreen extends Screen {
           <div>${dayPill}</div>
         </div></div>
       <div class="macro-bars">${bar('protein', tot.protein, T.protein, { compact: true })}${bar('carbs', tot.carbs, T.carbs, { compact: true, label: 'Carbs' })}${bar('fat', tot.fat, T.fat, { compact: true })}</div>
+      ${this.goalLine(c, day)}
     </div>`;
     const quick = `<div class="quick-grid">
       <button class="qa" data-act="scan">${icon.barcode}<span>Scan</span></button>
