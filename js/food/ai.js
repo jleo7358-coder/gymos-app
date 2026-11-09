@@ -5,13 +5,21 @@ import { getKV, setKV, deleteKV } from './store.js';
 import { cleanNutrients } from './nutrients.js';
 
 const API = 'https://generativelanguage.googleapis.com/v1beta';
-export class AIError extends Error {}
+// Bump when the automatic model choice changes, so older automatic picks are redone.
+const PICK_VERSION = 'auto2';
+export class AIError extends Error {
+  constructor(message, { status = 0, timeout = false } = {}) { super(message); this.status = status; this.timeout = timeout; }
+}
 
 export const ai = {
   get key() { return getKV('gemini.key', '') || ''; },
   setKey(k) { return k ? setKV('gemini.key', k.replace(/\s+/g, '')) : deleteKV('gemini.key'); },
   get model() { return getKV('gemini.model', '') || ''; },
-  setModel(m) { return m ? setKV('gemini.model', m) : deleteKV('gemini.model'); },
+  /** picked = chosen by hand in AI settings (otherwise it was chosen automatically). */
+  setModel(m, picked = false) {
+    setKV('gemini.modelPick', m ? (picked ? 'user' : PICK_VERSION) : '');
+    return m ? setKV('gemini.model', m) : deleteKV('gemini.model');
+  },
   get hasKey() { return !!this.key; },
 };
 
@@ -30,19 +38,20 @@ async function call(path, { method = 'GET', body = null, timeoutMs = 60000 } = {
       body: body ? JSON.stringify(body) : null,
     });
   } catch (e) {
-    if (e && e.name === 'AbortError') throw new AIError('Gemini took too long to answer. Try again.');
+    if (e && e.name === 'AbortError') throw new AIError('Gemini took too long to answer. Try again, or choose a different model in AI settings.', { timeout: true });
     throw new AIError("Couldn't reach Google Gemini. Check your connection.");
   } finally { clearTimeout(t); }
   let j = null;
   try { j = await res.json(); } catch {}
   if (!res.ok) {
     const msg = (j && j.error && j.error.message) || '';
-    if ((res.status === 400 || res.status === 401) && /api key/i.test(msg)) throw new AIError('That API key was rejected by Google. Check it in AI settings.');
-    if (res.status === 403) throw new AIError('This API key is not allowed to use Gemini. Create a key in Google AI Studio.');
-    if (res.status === 429) throw new AIError('Free Gemini limit reached for now. Wait a minute (or until tomorrow) and try again.');
-    if (res.status === 404) throw new AIError('The selected Gemini model is unavailable. Tap “Test key” in AI settings to pick another.');
-    if (res.status >= 500) throw new AIError('Gemini is having problems right now. Try again shortly.');
-    throw new AIError(msg ? `Gemini: ${msg.slice(0, 160)}` : `Gemini error (${res.status}).`);
+    const err = (text) => new AIError(text, { status: res.status });
+    if ((res.status === 400 || res.status === 401) && /api key/i.test(msg)) throw err('That API key was rejected by Google. Check it in AI settings.');
+    if (res.status === 403) throw err('This API key is not allowed to use Gemini. Create a key in Google AI Studio.');
+    if (res.status === 429) throw err('Free Gemini limit reached for now. Wait a minute (or until tomorrow) and try again.');
+    if (res.status === 404) throw err('The selected Gemini model is unavailable. Tap “Test key” in AI settings to pick another.');
+    if (res.status >= 500) throw err('Gemini is having problems right now. Try again shortly.');
+    throw err(msg ? `Gemini: ${msg.slice(0, 160)}` : `Gemini error (${res.status}).`);
   }
   return j;
 }
@@ -56,12 +65,14 @@ export async function discoverModels() {
     .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m) => m.name.replace(/^models\//, ''))
     .filter((n) => /^gemini/.test(n) && !/(image|tts|audio|live|embedding|learnlm|robotics|computer-use|native)/i.test(n));
+  // Prefer a stable, versioned "flash" model: fast, generous free limits. "-latest" aliases
+  // and previews can point at slower experimental models, so they rank lower.
   const rank = (n) => {
     let r = versionOf(n) * 10;
-    if (n === 'gemini-flash-latest') r += 1000;
     if (/flash/.test(n)) r += 100;
     if (/lite/.test(n)) r -= 30;
-    if (/preview|exp/.test(n)) r -= 50;
+    if (/latest/.test(n)) r -= 40;
+    if (/preview|exp|thinking/.test(n)) r -= 50;
     if (/pro/.test(n)) r -= 60; // slower and tighter free limits
     return r;
   };
@@ -70,7 +81,8 @@ export async function discoverModels() {
 }
 
 async function modelName() {
-  if (ai.model) return ai.model;
+  const pick = getKV('gemini.modelPick', '');
+  if (ai.model && (pick === 'user' || pick === PICK_VERSION)) return ai.model;
   const list = await discoverModels();
   if (!list.length) throw new AIError('No Gemini models are available for this key.');
   await ai.setModel(list[0]);
@@ -121,11 +133,44 @@ const SYSTEM = `You are a precise nutrition analyst for a UK food-tracking app. 
 
 const LABEL = `This is a photo of a nutrition label / packaging. Read the values exactly as printed. Return ONE item whose grams is 100 and whose nutrition is PER 100 g (or per 100 ml), converting from per-serving if only that is printed. Put the product name (and brand if visible) in name, and the stated serving size in portion (e.g. "1 bar (45 g)"). Convert energy from kJ if needed (kcal = kJ / 4.184).`;
 
+/** Keep "thinking" short: food estimates don't need it and it is the main cause of slow answers. */
+function thinkingFor(model) {
+  if (/gemini-(3|4)|latest/.test(model)) return { thinkingLevel: 'low' };
+  if (/2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+  if (/2\.5-pro/.test(model)) return { thinkingBudget: 128 };
+  return null;
+}
+
+async function generate(model, body, timeoutMs) {
+  const think = getKV('gemini.noThinkCfg', '') === model ? null : thinkingFor(model);
+  const withThink = think ? { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: think } } : body;
+  try {
+    return await call(`models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', body: withThink, timeoutMs });
+  } catch (e) {
+    // This model doesn't accept that thinking setting: remember and send without it.
+    if (think && e instanceof AIError && e.status === 400 && /think/i.test(e.message)) {
+      setKV('gemini.noThinkCfg', model);
+      return call(`models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', body, timeoutMs });
+    }
+    throw e;
+  }
+}
+
+/** A faster model to fall back to after a timeout (a "lite" one if possible). */
+async function fallbackModel(current) {
+  try {
+    const list = await discoverModels();
+    return list.find((m) => m !== current && /flash-lite/.test(m) && !/preview|latest/.test(m))
+      || list.find((m) => m !== current && /flash/.test(m)) || null;
+  } catch { return null; }
+}
+
 /**
- * mode: 'photo' | 'label' | 'text'. Returns { items: [{name, portion, grams, confidence, base(per 100 g), totals}], notes, model }.
+ * mode: 'photo' | 'label' | 'text'. onStatus(text) reports progress.
+ * Returns { items: [{name, portion, grams, confidence, base(per 100 g), totals}], notes, model }.
  */
-export async function analyse({ mode, image = null, text = '' }) {
-  const model = await modelName();
+export async function analyse({ mode, image = null, text = '', onStatus = () => {} }) {
+  let model = await modelName();
   const parts = [];
   if (image) parts.push({ inline_data: { mime_type: 'image/jpeg', data: image } });
   let prompt;
@@ -139,20 +184,35 @@ export async function analyse({ mode, image = null, text = '' }) {
     generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: SCHEMA },
   };
   let j;
-  try { j = await call(`models/${encodeURIComponent(model)}:generateContent`, { method: 'POST', body }); }
+  try { j = await generate(model, body, 45000); }
   catch (e) {
-    // A stale saved model: forget it and retry once with a freshly discovered one.
-    if (e instanceof AIError && /unavailable/.test(e.message) && ai.model) { await ai.setModel(''); return analyse({ mode, image, text }); }
-    throw e;
+    if (!(e instanceof AIError)) throw e;
+    if (/unavailable/.test(e.message) && ai.model) {
+      // A stale saved model: forget it and retry once with a freshly discovered one.
+      await ai.setModel('');
+      model = await modelName();
+      onStatus(`Switching to ${model}…`);
+      j = await generate(model, body, 60000);
+    } else if (e.timeout || e.status === 503 || e.status === 500) {
+      const alt = await fallbackModel(model);
+      if (!alt) throw e;
+      onStatus(`${model} is slow right now — trying ${alt}…`);
+      model = alt;
+      j = await generate(model, body, 60000);
+    } else throw e;
   }
   const cand = j && j.candidates && j.candidates[0];
   if (!cand) {
     const block = j && j.promptFeedback && j.promptFeedback.blockReason;
     throw new AIError(block ? `Gemini refused this request (${block}).` : 'Gemini returned no answer. Try again.');
   }
-  const raw = (cand.content && cand.content.parts || []).map((p) => p.text || '').join('');
+  const raw = (cand.content && cand.content.parts || []).filter((p) => !p.thought).map((p) => p.text || '').join('');
   let data;
-  try { data = JSON.parse(raw); } catch { throw new AIError("Gemini's answer couldn't be read. Try again."); }
+  try { data = JSON.parse(raw); }
+  catch {
+    if (cand.finishReason === 'MAX_TOKENS') throw new AIError('Gemini’s answer was cut off. Try again, or log fewer foods at once.');
+    throw new AIError("Gemini's answer couldn't be read. Try again.");
+  }
   return { ...parseResult(data), model };
 }
 

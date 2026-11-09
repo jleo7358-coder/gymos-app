@@ -550,9 +550,11 @@ export class AISheet extends SheetView {
     if (this.phase === 'loading') return;
     if (this.mode !== 'text' && !this.image) { this.error = this.mode === 'label' ? 'Take a photo of the nutrition label first.' : 'Take or choose a photo first.'; this.refresh(); return; }
     if (this.mode === 'text' && !this.text.trim()) { this.error = 'Describe what you ate.'; this.refresh(); return; }
-    this.phase = 'loading'; this.error = ''; this.refresh();
+    this.phase = 'loading'; this.error = ''; this.status = ''; this.started = Date.now(); this.refresh();
+    this.ticker = setInterval(() => { if (this.phase === 'loading') this.refresh(); }, 1000);
     try {
-      const r = await analyse({ mode: this.mode, image: this.mode === 'text' ? null : this.image, text: this.text.trim() });
+      const r = await analyse({ mode: this.mode, image: this.mode === 'text' ? null : this.image, text: this.text.trim(), onStatus: (t) => { this.status = t; this.refresh(); } });
+      clearInterval(this.ticker);
       if (this.closed) return;
       if (!r.items.length) { this.phase = 'input'; this.error = r.isFood ? "The AI couldn't estimate this. Add a short description and try again." : "No food was recognised. Try a clearer photo or describe it."; this.refresh(); return; }
       if (this.mode === 'label') { this.labelToFood(r.items[0]); return; }
@@ -562,9 +564,10 @@ export class AISheet extends SheetView {
     } catch (e) {
       this.phase = 'input'; this.error = e instanceof AIError ? e.message : `Something went wrong: ${e.message || e}`;
     }
+    clearInterval(this.ticker);
     this.refresh();
   }
-  onDismiss() { this.closed = true; }
+  onDismiss() { this.closed = true; clearInterval(this.ticker); }
   labelToFood(item) {
     // Values come back per 100 g; review them as a custom food linked to the barcode.
     const servingG = parseDecimal((/(\d+(?:[.,]\d+)?)\s*(g|ml)\b/i.exec(item.portion) || [])[1]);
@@ -640,7 +643,8 @@ export class AISheet extends SheetView {
         : `<div class="tiles"><button class="qa big" data-act="take">${icon.camera}<span>Take photo</span></button><button class="qa big" data-act="choose">${icon.list}<span>Choose photo</span></button></div>`) : ''}
       <textarea class="textarea short" placeholder="${this.mode === 'text' ? 'e.g. 2 scrambled eggs on 2 slices of wholemeal toast with butter, and a black coffee' : this.mode === 'label' ? 'Optional: product name' : 'Optional details: e.g. large portion, cooked in olive oil, no sauce'}" data-input="text">${esc(this.text)}</textarea>
       ${this.error ? `<div class="caption text-partial">${esc(this.error)}</div>` : ''}
-      <button class="btn primary" data-act="run" ${loading ? 'disabled' : ''}>${loading ? '<span class="spinner dark"></span> ANALYSING…' : `${icon.sparkle} ANALYSE`}</button>
+      <button class="btn primary" data-act="run" ${loading ? 'disabled' : ''}>${loading ? `<span class="spinner dark"></span> ANALYSING… ${Math.floor((Date.now() - this.started) / 1000)}s` : `${icon.sparkle} ANALYSE`}</button>
+      ${loading ? `<div class="caption muted">${esc(this.status || 'Usually takes 5–20 seconds.')}</div>` : ''}
       <div class="caption faint">${this.mode === 'label' ? 'Photograph the nutrition table straight on. The values are read and shown for you to check before saving.' : 'Tip: include something for scale (a fork or your hand) and mention hidden extras like oil or dressing.'} Photos and text are sent to Google Gemini for analysis and are not stored by GymOS.</div>`;
   }
 }

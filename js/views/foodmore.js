@@ -5,7 +5,7 @@ import { nav, Screen } from '../nav.js';
 import { icon, presentSheet, menu, confirm, toast, alert, pill, toggle, stepper, lineChart, emptyState, statTile } from '../ui.js';
 import { esc, fmt, todayKey, addDaysKey, daysInRange, parseDecimal, clamp, sum, norm, parseDay } from '../util.js';
 import { changed, Q } from '../engine.js';
-import { state } from '../food/store.js';
+import { state, getKV } from '../food/store.js';
 import { NUTRIENTS, N, GROUPS, MEALS, F, fmtN, entryTotals, coverage, averageTotals, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
 import * as Log from '../food/log.js';
@@ -157,7 +157,7 @@ export class AISettingsScreen extends Screen {
       remove: () => confirm('Remove the API key?', 'AI photo and description logging stops working until you add a key again.', 'Remove', async () => { await ai.setKey(''); await ai.setModel(''); this.keyText = ''; this.models = null; this.message = 'Key removed.'; this.err = false; changed(); }),
     });
     this.inputs = { key: (el) => { this.keyText = el.value; } };
-    this.changes = { model: (el) => { ai.setModel(el.value); this.message = el.value ? `Using ${el.value}.` : 'Choosing automatically.'; this.err = false; changed(); } };
+    this.changes = { model: (el) => { ai.setModel(el.value, true); this.message = el.value ? `Using ${el.value}.` : 'Choosing automatically.'; this.err = false; changed(); } };
   }
   async save() {
     const k = this.keyText.replace(/\s+/g, '');
@@ -172,7 +172,7 @@ export class AISettingsScreen extends Screen {
     try {
       this.models = await discoverModels();
       if (!this.models.length) throw new AIError('This key works but has no Gemini models available.');
-      if (!ai.model || !this.models.includes(ai.model)) await ai.setModel(this.models[0]);
+      if (!ai.model || !this.models.includes(ai.model) || getKV('gemini.modelPick', '') !== 'user') await ai.setModel(this.models[0]);
       this.message = `Key works. Using ${ai.model}.`; this.err = false;
     } catch (e) { this.message = e.message; this.err = true; }
     this.testing = false; changed();
