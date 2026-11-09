@@ -9,7 +9,7 @@ import { state, getKV } from '../food/store.js';
 import { NUTRIENTS, N, GROUPS, MEALS, F, fmtN, entryTotals, coverage, averageTotals, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
 import * as Log from '../food/log.js';
-import { ai, discoverModels, AIError } from '../food/ai.js';
+import { ai, discoverModels, analyse, AIError } from '../food/ai.js';
 import { bar, NumberSheet, SheetView, macroLine } from './foodui.js';
 import { CustomFoodSheet, FoodAmountSheet } from './foodadd.js';
 
@@ -152,6 +152,7 @@ export class AISettingsScreen extends Screen {
     Object.assign(this.actions, {
       save: () => this.save(),
       test: () => this.test(),
+      tryIt: () => this.tryIt(),
       show: () => { this.show = !this.show; nav.refresh(); },
       paste: async () => { try { const t = await navigator.clipboard.readText(); if (t) { this.keyText = t.trim(); nav.refresh(); } } catch { toast('Long-press the field and choose Paste'); } },
       remove: () => confirm('Remove the API key?', 'AI photo and description logging stops working until you add a key again.', 'Remove', async () => { await ai.setKey(''); await ai.setModel(''); this.keyText = ''; this.models = null; this.message = 'Key removed.'; this.err = false; changed(); }),
@@ -165,6 +166,17 @@ export class AISettingsScreen extends Screen {
     if (k.length < 20 || !/^[A-Za-z0-9_.\-]+$/.test(k)) { this.message = 'That doesn’t look like a complete key. Copy it again from AI Studio (it starts with “AIza” or “AQ.”).'; this.err = true; nav.refresh(); return; }
     await ai.setKey(k); await ai.setModel('');
     await this.test();
+  }
+  async tryIt() {
+    if (!ai.hasKey) { this.message = 'Save a key first.'; this.err = true; nav.refresh(); return; }
+    this.testing = true; this.message = 'Asking Gemini about “1 medium banana”…'; this.err = false; nav.refresh();
+    const t0 = Date.now();
+    try {
+      const r = await analyse({ mode: 'text', text: '1 medium banana', onStatus: (s) => { this.message = s; nav.refresh(); } });
+      const k = r.items[0] ? r.items[0].totals.kcal : null;
+      this.message = `Works: ${r.model} answered in ${((Date.now() - t0) / 1000).toFixed(1)} s${k != null ? ` (banana ≈ ${Math.round(k)} kcal)` : ''}.`; this.err = false;
+    } catch (e) { this.message = `${e.message}${e.detail ? `\nGoogle said: ${e.detail}` : ''}`; this.err = true; }
+    this.testing = false; changed();
   }
   async test() {
     if (!ai.hasKey) { this.message = 'Save a key first.'; this.err = true; nav.refresh(); return; }
@@ -194,10 +206,11 @@ export class AISettingsScreen extends Screen {
           <button class="link-btn small" data-act="show">${this.show ? 'Hide' : 'Show'}</button></div>
       </div>
       <div class="tiles"><button class="btn secondary" data-act="paste">Paste</button><button class="btn primary short" data-act="save" ${this.testing ? 'disabled' : ''}>${this.testing ? '<span class="spinner dark"></span>' : 'Save & test'}</button></div>
-      ${this.message ? `<div class="caption ${this.err ? 'text-partial' : 'text-completed'}">${esc(this.message)}</div>` : ''}
+      ${this.message ? `<div class="caption pre-line ${this.err ? 'text-partial' : 'text-completed'}">${esc(this.message)}</div>` : ''}
       ${has ? `<div class="section-label">Model</div>
         <div class="list grouped form"><label class="row"><span class="row-label grow">Gemini model</span><select class="select small" data-change="model">${models.map((m) => `<option value="${esc(m)}" ${ai.model === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}${models.length ? '' : '<option value="">Automatic</option>'}</select></label>
           <button class="list-row accent" data-act="test" ${this.testing ? 'disabled' : ''}><span>Test key & refresh models</span></button>
+          <button class="list-row accent" data-act="tryIt" ${this.testing ? 'disabled' : ''}><span>Run a food test</span></button>
           <button class="list-row destructive" data-act="remove"><span>Remove key</span></button></div>
         <div class="caption faint">The fastest current “flash” model is picked automatically. If Google retires a model, GymOS switches to a newer one.</div>` : ''}
       <div class="section-label">Privacy & limits</div>

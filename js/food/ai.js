@@ -8,7 +8,7 @@ const API = 'https://generativelanguage.googleapis.com/v1beta';
 // Bump when the automatic model choice changes, so older automatic picks are redone.
 const PICK_VERSION = 'auto2';
 export class AIError extends Error {
-  constructor(message, { status = 0, timeout = false } = {}) { super(message); this.status = status; this.timeout = timeout; }
+  constructor(message, { status = 0, timeout = false, detail = '' } = {}) { super(message); this.status = status; this.timeout = timeout; this.detail = detail; }
 }
 
 export const ai = {
@@ -45,7 +45,7 @@ async function call(path, { method = 'GET', body = null, timeoutMs = 60000 } = {
   try { j = await res.json(); } catch {}
   if (!res.ok) {
     const msg = (j && j.error && j.error.message) || '';
-    const err = (text) => new AIError(text, { status: res.status });
+    const err = (text) => new AIError(text, { status: res.status, detail: `${res.status}${msg ? ' · ' + msg.slice(0, 200) : ''}` });
     if ((res.status === 400 || res.status === 401) && /api key/i.test(msg)) throw err('That API key was rejected by Google. Check it in AI settings.');
     if (res.status === 403) throw err('This API key is not allowed to use Gemini. Create a key in Google AI Studio.');
     if (res.status === 429) throw err('Free Gemini limit reached for now. Wait a minute (or until tomorrow) and try again.');
@@ -156,64 +156,93 @@ async function generate(model, body, timeoutMs) {
   }
 }
 
-/** A faster model to fall back to after a timeout (a "lite" one if possible). */
-async function fallbackModel(current) {
+/** Other models to try when the first one fails (each model has its own free quota). */
+async function alternatives(current) {
   try {
-    const list = await discoverModels();
-    return list.find((m) => m !== current && /flash-lite/.test(m) && !/preview|latest/.test(m))
-      || list.find((m) => m !== current && /flash/.test(m)) || null;
-  } catch { return null; }
+    const list = (await discoverModels()).filter((m) => m !== current && /flash/.test(m));
+    const lite = list.filter((m) => /lite/.test(m));
+    const rest = list.filter((m) => !/lite/.test(m));
+    return [...lite.slice(0, 1), ...rest.slice(0, 1), ...lite.slice(1, 2)];
+  } catch { return []; }
+}
+
+const SHAPE = `Reply with ONLY a JSON object, no markdown, in exactly this shape:
+{"is_food": true, "notes": "", "items": [{"name": "", "portion": "", "grams": 0, "confidence": 0.8, "calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "sugars_g": 0, "saturated_fat_g": 0, "salt_g": 0, "vitamin_c_mg": 0, "vitamin_d_ug": 0, "calcium_mg": 0, "iron_mg": 0, "potassium_mg": 0, "magnesium_mg": 0}]}
+All numbers are plain numbers. Leave out vitamin/mineral fields you cannot estimate.`;
+
+function parseJSON(raw) {
+  const t = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
+  try { return JSON.parse(t); } catch {}
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch {} }
+  return null;
 }
 
 /**
  * mode: 'photo' | 'label' | 'text'. onStatus(text) reports progress.
+ * Tries the chosen model, then a simpler request, then other models, so one busy or
+ * failing model doesn't stop you logging.
  * Returns { items: [{name, portion, grams, confidence, base(per 100 g), totals}], notes, model }.
  */
 export async function analyse({ mode, image = null, text = '', onStatus = () => {} }) {
   let model = await modelName();
-  const parts = [];
-  if (image) parts.push({ inline_data: { mime_type: 'image/jpeg', data: image } });
   let prompt;
   if (mode === 'label') prompt = LABEL + (text ? `\nExtra info from the user: ${text}` : '');
   else if (mode === 'text') prompt = `Estimate the nutrition of what I ate: ${text}`;
   else prompt = 'Identify the foods in this photo and estimate portions and nutrition.' + (text ? ` Extra details from me: ${text}` : '');
-  parts.push({ text: prompt });
-  const body = {
-    systemInstruction: { parts: [{ text: SYSTEM }] },
-    contents: [{ role: 'user', parts }],
-    generationConfig: { temperature: 0.2, responseMimeType: 'application/json', responseSchema: SCHEMA },
+  const build = (simple) => {
+    const parts = [];
+    if (image) parts.push({ inline_data: { mime_type: 'image/jpeg', data: image } });
+    parts.push({ text: simple ? `${prompt}\n\n${SHAPE}` : prompt });
+    const generationConfig = simple
+      ? { temperature: 0.2, responseMimeType: 'application/json' }
+      : { temperature: 0.2, responseMimeType: 'application/json', responseSchema: SCHEMA };
+    return { systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: 'user', parts }], generationConfig };
   };
-  let j;
-  try { j = await generate(model, body, 45000); }
-  catch (e) {
-    if (!(e instanceof AIError)) throw e;
-    if (/unavailable/.test(e.message) && ai.model) {
-      // A stale saved model: forget it and retry once with a freshly discovered one.
-      await ai.setModel('');
-      model = await modelName();
-      onStatus(`Switching to ${model}…`);
-      j = await generate(model, body, 60000);
-    } else if (e.timeout || e.status === 503 || e.status === 500) {
-      const alt = await fallbackModel(model);
-      if (!alt) throw e;
-      onStatus(`${model} is slow right now — trying ${alt}…`);
-      model = alt;
-      j = await generate(model, body, 60000);
-    } else throw e;
+  const simpleFirst = getKV('gemini.simple', '') === model;
+  const plan = [{ model, simple: simpleFirst }, { model, simple: !simpleFirst }];
+  let alts = null;
+  let lastErr = null;
+  for (let i = 0; i < plan.length && i < 5; i++) {
+    const step = plan[i];
+    if (i > 0) onStatus(step.model === model ? `${model} had a problem — trying a simpler request…` : `Trying ${step.model}…`);
+    let j;
+    try { j = await generate(step.model, build(step.simple), i === 0 ? 45000 : 40000); }
+    catch (e) {
+      if (!(e instanceof AIError)) throw e;
+      lastErr = e;
+      if (e.status === 404 && i === 0 && ai.model) {
+        // A stale saved model: forget it and start again with a freshly discovered one.
+        await ai.setModel('');
+        model = await modelName();
+        plan.push({ model, simple: false });
+        continue;
+      }
+      const retryable = e.timeout || e.status >= 500 || e.status === 429 || (e.status === 400 && !/api key/i.test(e.message));
+      if (!retryable) throw e;
+      if (alts == null && i >= 1) {
+        alts = await alternatives(model);
+        for (const m of alts) plan.push({ model: m, simple: true });
+      }
+      continue;
+    }
+    const cand = j && j.candidates && j.candidates[0];
+    if (!cand) {
+      const block = j && j.promptFeedback && j.promptFeedback.blockReason;
+      if (block) throw new AIError(`Gemini refused this request (${block}).`);
+      lastErr = new AIError('Gemini returned no answer.'); continue;
+    }
+    const raw = (cand.content && cand.content.parts || []).filter((p) => !p.thought).map((p) => p.text || '').join('');
+    const data = parseJSON(raw);
+    if (!data) { lastErr = new AIError(cand.finishReason === 'MAX_TOKENS' ? 'Gemini’s answer was cut off.' : "Gemini's answer couldn't be read.", { detail: `finish: ${cand.finishReason || '?'}` }); continue; }
+    // Remember what worked so the next request goes straight there.
+    if (step.model !== ai.model && getKV('gemini.modelPick', '') !== 'user') await ai.setModel(step.model);
+    if (step.simple) setKV('gemini.simple', step.model); else if (getKV('gemini.simple', '') === step.model) deleteKV('gemini.simple');
+    return { ...parseResult(data), model: step.model };
   }
-  const cand = j && j.candidates && j.candidates[0];
-  if (!cand) {
-    const block = j && j.promptFeedback && j.promptFeedback.blockReason;
-    throw new AIError(block ? `Gemini refused this request (${block}).` : 'Gemini returned no answer. Try again.');
-  }
-  const raw = (cand.content && cand.content.parts || []).filter((p) => !p.thought).map((p) => p.text || '').join('');
-  let data;
-  try { data = JSON.parse(raw); }
-  catch {
-    if (cand.finishReason === 'MAX_TOKENS') throw new AIError('Gemini’s answer was cut off. Try again, or log fewer foods at once.');
-    throw new AIError("Gemini's answer couldn't be read. Try again.");
-  }
-  return { ...parseResult(data), model };
+  const e = lastErr || new AIError('Gemini returned no answer.');
+  const tried = [...new Set(plan.map((p) => p.model))].join(', ');
+  throw new AIError(`${e.message.replace(/ Try again.*$/, '')} Tried: ${tried}. Try again in a minute.`, { status: e.status, detail: e.detail });
 }
 
 export function parseResult(data) {

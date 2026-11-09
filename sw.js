@@ -1,7 +1,7 @@
 // Offline support: every app file is cached on install, so GymOS opens and works with no
 // connection at all. A new version is picked up the next time the app is opened online.
 
-const VERSION = "1689ea3704ad";
+const VERSION = "03f8bcac10cb";
 const CACHE = `gymos-app-${VERSION}`;
 const ASSETS = [
   "./",

@@ -473,3 +473,4 @@ body.rest-flash #app::after { content: ""; position: fixed; inset: 0; pointer-ev
 .scan-over svg { width: 34px; height: 34px; color: var(--text3); }
 .bmi-ticks { position: relative; height: 16px; }
 .bmi-ticks span { position: absolute; transform: translateX(-50%); }
+.pre-line { white-space: pre-line; }
