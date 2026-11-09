@@ -4,6 +4,7 @@
 import { Q, Calendar } from '../engine.js';
 import { getKV, setKV } from './store.js';
 import { NUTRIENTS, N, F } from './nutrients.js';
+import { planDay } from './plan.js';
 import { addDaysKey, todayKey, parseDay, MS_DAY, sum, clamp } from '../util.js';
 
 export const ACTIVITY = [
@@ -158,12 +159,20 @@ export function compute(day = todayKey(), p = profile()) {
     restKcal = base - (p.cycleKcal * T) / (7 - T);
     kcal = training ? trainKcal : restKcal;
   }
+  // An imported weekly plan sets each weekday's calories (and protein/fat) directly.
+  const pd = p.plan ? planDay(p.plan, day) : null;
+  if (pd) kcal = pd.kcal;
   const ov = p.overrides || {};
   if (ov.kcal != null) kcal = ov.kcal;
   kcal = round(kcal, 10);
 
   const weight = body.weightKg || 75;
   const targets = { kcal, ...macroTargets(p, kcal, weight) };
+  if (pd && (p.plan.protein != null || p.plan.fat != null)) {
+    if (p.plan.protein != null) targets.protein = p.plan.protein;
+    if (p.plan.fat != null) targets.fat = p.plan.fat;
+    targets.carbs = Math.max(0, round((kcal - targets.protein * 4 - targets.fat * 9) / 4));
+  }
   for (const k of ['protein', 'carbs', 'fat']) if (ov[k] != null) targets[k] = ov[k];
   targets.fibre = ov.fibre ?? p.fibre;
   targets.sugars = ov.sugars ?? p.sugarLimit;
@@ -171,11 +180,11 @@ export function compute(day = todayKey(), p = profile()) {
   targets.salt = ov.salt ?? p.saltLimit;
   for (const n of NUTRIENTS) if (n.nrv != null) targets[n.key] = ov[n.key] ?? (p.nutrients[n.key] ?? n.nrv);
   const waterBase = p.waterMl ?? round(35 * weight, 50);
-  targets.water = waterBase + (training ? (p.waterTrainingMl || 0) : 0);
+  targets.water = pd ? (p.plan.water ?? waterBase) + (pd.water || 0) : waterBase + (training ? (p.waterTrainingMl || 0) : 0);
 
   return {
     day, body, bmr: B, formulaTDEE: formula, adaptive, tdee, delta, floored, floor, training, trainingDays: T,
-    trainKcal: round(trainKcal, 10), restKcal: round(restKcal, 10), baseKcal: round(base, 10), targets, plan,
+    trainKcal: round(trainKcal, 10), restKcal: round(restKcal, 10), baseKcal: round(base, 10), targets, plan, planDay: pd,
     bmi: bmi(body.weightKg, body.heightCm), hasBody: !!(body.weightKg && body.heightCm && body.age != null),
   };
 }

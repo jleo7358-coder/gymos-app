@@ -2,16 +2,17 @@
 
 import { nav, Screen } from '../nav.js';
 import { icon, presentSheet, menu, confirm, toast, alert, pill } from '../ui.js';
-import { esc, fmt, todayKey, addDaysKey, daysBetween } from '../util.js';
+import { esc, fmt, todayKey, addDaysKey, daysBetween, parseDay } from '../util.js';
 import * as FS from '../food/store.js';
 import { state } from '../food/store.js';
 import { MEALS, F, fmtN, entryTotals, amountText, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
 import * as Diets from '../food/diets.js';
+import * as Plan from '../food/plan.js';
 import * as Log from '../food/log.js';
 import { ring, bar, NumberSheet, macroLine } from './foodui.js';
 import { AddFoodSheet, FoodAmountSheet, ScanSheet, QuickAddSheet, openAI } from './foodadd.js';
-import { GoalsScreen, NutrientsScreen, TrendsScreen, MyFoodsScreen, SavedMealsScreen, AISettingsScreen, BodyCalcScreen } from './foodmore.js';
+import { PlanScreen, GoalsScreen, NutrientsScreen, TrendsScreen, MyFoodsScreen, SavedMealsScreen, AISettingsScreen, BodyCalcScreen } from './foodmore.js';
 
 let rootScreen = null;
 /** Switch to the Food tab showing a given day (used by the Calendar). */
@@ -30,6 +31,7 @@ export class FoodScreen extends Screen {
       next: () => { if (this.day < todayKey()) { this.day = addDaysKey(this.day, 1); nav.refresh(); } },
       today: () => { this.day = todayKey(); nav.refresh(); },
       more: () => menu([
+        { label: 'Weekly plan', icon: 'calendar', handler: () => nav.push(new PlanScreen()) },
         { label: 'Goals & targets', icon: 'target', handler: () => nav.push(new GoalsScreen()) },
         { label: 'Trends', icon: 'chart', handler: () => nav.push(new TrendsScreen()) },
         { label: 'All nutrients', icon: 'pill', handler: () => nav.push(new NutrientsScreen(this.day)) },
@@ -56,6 +58,7 @@ export class FoodScreen extends Screen {
         toast(n ? `Copied ${n} item${n === 1 ? '' : 's'} from ${fmt.weekdayDayMonth(from)}` : 'Nothing logged the day before');
       },
       setup: () => nav.push(new GoalsScreen()),
+      plan: () => nav.push(new PlanScreen()),
     });
   }
   defaultMeal() { return this.day === todayKey() ? defaultMeal() : 'snacks'; }
@@ -110,7 +113,11 @@ export class FoodScreen extends Screen {
       bits.push(`<span class="${open ? 'text-completed' : 'muted'}">Eating window ${esc(p.window.start)}–${esc(p.window.end)} · ${open ? 'open' : 'closed'}</span>`);
     }
     const pr = p.diet && p.diet !== 'balanced' ? Diets.preset(p.diet) : null;
-    if (pr) bits.unshift(`<span>${esc(pr.name)}</span>`);
+    if (p.plan && p.plan.targetWeightKg != null) {
+      const exp = Plan.expectedWeight(p.plan, day);
+      const wk = Math.max(1, Math.floor((parseDay(day) - parseDay(p.plan.startDate)) / (7 * 86400000)) + 1);
+      bits.unshift(`<button class="link-btn small inline" data-act="plan">${esc(p.plan.name)} · week ${wk} · aim ≈ ${fmt.kg(exp)}</button>`);
+    } else if (pr) bits.unshift(`<span>${esc(pr.name)}</span>`);
     return bits.length ? `<div class="goal-line caption faint num">${bits.join('<span class="dotsep">·</span>')}</div>` : '';
   }
   render() {
@@ -126,9 +133,9 @@ export class FoodScreen extends Screen {
     const dateBar = `<div class="date-bar"><button class="nav-btn" data-act="prev" aria-label="Previous day">${icon.chevronLeft}</button>
       <button class="date-title" data-act="today">${rel ? `<b>${rel}</b> · ` : ''}${esc(fmt.weekdayDayMonth(day))}</button>
       <button class="nav-btn" data-act="next" ${day >= today ? 'disabled' : ''} aria-label="Next day">${icon.chevron}</button></div>`;
-    const setup = Goals.isConfigured() ? '' : `<button class="card info card-btn" data-act="setup"><div class="row-between"><span class="sub strong">Set your goals</span>${icon.chevron}</div>
+    const setup = Goals.isConfigured() || Goals.profile().plan ? '' : `<button class="card info card-btn" data-act="setup"><div class="row-between"><span class="sub strong">Set your goals</span>${icon.chevron}</div>
       <div class="caption muted">Targets below use defaults. Add your sex, activity and goal to get personal calorie, protein and nutrient targets${c.hasBody ? '' : ' (and a weekly check-in in the Body tab)'}.</div></button>`;
-    const dayPill = c.trainingDays && Goals.profile().cycling ? pill(c.training ? 'TRAINING DAY' : 'REST DAY', c.training ? 'active' : 'rest') : (c.training ? pill('TRAINING DAY', 'active') : '');
+    const dayPill = c.planDay && c.planDay.label ? pill(c.planDay.label.toUpperCase(), 'active') : c.trainingDays && Goals.profile().cycling ? pill(c.training ? 'TRAINING DAY' : 'REST DAY', c.training ? 'active' : 'rest') : (c.training ? pill('TRAINING DAY', 'active') : '');
     const summary = `<div class="card food-summary"><div class="sum-top">
         ${ring(eaten, T.kcal, { label: 'eaten' })}
         <div class="sum-stats">

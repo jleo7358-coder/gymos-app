@@ -2,13 +2,14 @@
 // and the BMI & body calculator.
 
 import { nav, Screen } from '../nav.js';
-import { icon, presentSheet, menu, confirm, toast, alert, pill, toggle, stepper, lineChart, emptyState, statTile } from '../ui.js';
-import { esc, fmt, todayKey, addDaysKey, daysInRange, parseDecimal, clamp, sum, norm, parseDay } from '../util.js';
+import { icon, presentSheet, menu, confirm, toast, alert, pill, toggle, stepper, lineChart, emptyState, statTile, sheetHeader } from '../ui.js';
+import { esc, fmt, todayKey, addDaysKey, daysInRange, parseDecimal, clamp, sum, norm, parseDay, weekdayName } from '../util.js';
 import { changed, Q } from '../engine.js';
 import { state, getKV } from '../food/store.js';
 import { NUTRIENTS, N, GROUPS, MEALS, F, fmtN, entryTotals, coverage, averageTotals, mealLabel, defaultMeal } from '../food/nutrients.js';
 import * as Goals from '../food/goals.js';
 import * as Diets from '../food/diets.js';
+import * as Plan from '../food/plan.js';
 import * as Log from '../food/log.js';
 import { ai, discoverModels, analyse, AIError } from '../food/ai.js';
 import { bar, NumberSheet, SheetView, macroLine } from './foodui.js';
@@ -46,6 +47,7 @@ export class GoalsScreen extends Screen {
       resetOverrides: () => confirm('Reset all custom targets?', 'Every target goes back to the calculated value.', 'Reset', () => upd({ overrides: {} })),
       calc: () => nav.push(new BodyCalcScreen()),
       diets: () => nav.push(new DietPresetsScreen()),
+      plan: () => nav.push(new PlanScreen()),
       targetWeight: () => {
         const p = Goals.profile(); const w = Goals.bodyInputs(p).weightKg;
         presentSheet(new NumberSheet({
@@ -195,7 +197,9 @@ export class GoalsScreen extends Screen {
       <div class="list grouped"><button class="list-row accent" data-act="calc">${icon.scale}<span class="grow">BMI & body calculator</span>${icon.chevron}</button></div>
       <div class="caption faint">Estimates for healthy adults, not medical advice. Targets update automatically as you log weigh-ins in the Body tab.</div>`;
 
-    return `<div class="stack">${bodyCard}${dietCard}${goalCard}${macroCard}${optCard}${resultCard}${targets}</div>`;
+    const planCard = p.plan ? `<button class="card info card-btn" data-act="plan"><div class="row-between"><span class="sub strong">Weekly plan: ${esc(p.plan.name)}</span>${icon.chevron}</div>
+      <div class="caption muted">Calories${p.plan.protein != null ? ', protein' : ''}${p.plan.fat != null ? ', fat' : ''} and water come from your plan for each weekday (today ${fmt.integer(c.targets.kcal)} kcal). The settings below still set fibre, sugar, salt and vitamins.</div></button>` : '';
+    return `<div class="stack">${planCard}${bodyCard}${dietCard}${goalCard}${macroCard}${optCard}${resultCard}${targets}</div>`;
   }
 }
 
@@ -210,6 +214,116 @@ function planNote(plan, p) {
   return `<div class="card">${pctDone}
     <div class="sub num">${fmt.number(plan.toGo, 1)} kg to ${p.goal === 'lose' ? 'lose' : 'gain'} · about ${fmt.integer(plan.toGo / plan.rate)} weeks${plan.eta ? ` (${fmt.dayMonthYear(plan.eta)})` : ''}</div>
     ${plan.capped ? `<div class="caption text-partial">That date needs more than a safe rate, so it's capped at ${fmt.number(plan.rate, 2)} kg a week. The estimated finish date is shown instead.</div>` : ''}</div>`;
+}
+
+// ---------------------------------------------------------------------------------
+// Weekly plan (imported text): a calorie target per weekday + weekly milestones
+
+export class PlanImportSheet extends SheetView {
+  constructor(initial = '') {
+    super();
+    this.text = initial; this.error = ''; this.parsed = null;
+    this.actions = {
+      cancel: () => this.close(),
+      done: () => this.importIt(),
+      template: () => { this.text = Plan.ROAD_TO_95; this.check(); this.refresh(); },
+      paste: async () => { try { const t = await navigator.clipboard.readText(); if (t) { this.text = t; this.check(); this.refresh(); } } catch { toast('Long-press the box and choose Paste'); } },
+    };
+    this.inputs = { text: (el) => { this.text = el.value; this.check(); this.refreshPreview(); } };
+    this.check();
+  }
+  check() {
+    this.error = ''; this.parsed = null;
+    if (!this.text.trim()) return;
+    try { this.parsed = Plan.parsePlan(this.text); } catch (e) { this.error = e.message; }
+  }
+  refreshPreview() { const el = document.querySelector(`[data-view="${this.id}"] [data-plan-preview]`); if (el) el.innerHTML = this.preview(); }
+  preview() {
+    if (this.error) return `<div class="caption text-partial">${esc(this.error)}</div>`;
+    const pl = this.parsed;
+    if (!pl) return '<div class="caption faint">Paste a plan that starts with “GYMOS PLAN”.</div>';
+    const fin = Plan.finishDate(pl);
+    return `<div class="card"><div class="sub strong">${esc(pl.name)}</div>
+      <div class="caption muted num">${fmt.integer(Plan.weeklyAverage(pl))} kcal a day on average${pl.protein != null ? ` · ${fmt.integer(pl.protein)} g protein` : ''}${pl.targetWeightKg != null ? ` · ${fmt.number(pl.startWeightKg, 1)} → ${fmt.number(pl.targetWeightKg, 1)} kg by about ${esc(fmt.dayMonthYear(fin))}` : ''}</div></div>`;
+  }
+  importIt() {
+    this.check();
+    if (!this.parsed) { this.error = this.error || 'Paste your plan first.'; this.refresh(); return; }
+    const pl = this.parsed;
+    const patch = { plan: pl, cycling: false };
+    if (pl.targetWeightKg != null) {
+      Object.assign(patch, {
+        goal: pl.targetWeightKg < pl.startWeightKg ? 'lose' : pl.targetWeightKg > pl.startWeightKg ? 'gain' : 'maintain',
+        rate: pl.rate, targetWeightKg: pl.targetWeightKg, startWeightKg: pl.startWeightKg, startDate: pl.startDate, targetDate: null,
+      });
+    }
+    upd(patch);
+    this.close();
+    toast(`Plan “${pl.name}” imported`, 'good');
+  }
+  render() {
+    return `${sheetHeader('Import plan', { right: 'Import' })}
+      <textarea class="textarea mono plan-text" placeholder="GYMOS PLAN&#10;name: …&#10;mon: 2600 School walk&#10;…" data-input="text" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(this.text)}</textarea>
+      <div class="tiles"><button class="btn secondary" data-act="paste">Paste</button><button class="btn secondary" data-act="template">Road to 95</button></div>
+      <div data-plan-preview>${this.preview()}</div>
+      <div class="caption faint">Each weekday gets its own calorie target. Importing replaces any earlier plan; your food log isn't changed.</div>`;
+  }
+}
+
+export class PlanScreen extends Screen {
+  constructor() {
+    super('Weekly plan');
+    Object.assign(this.actions, {
+      import: () => presentSheet(new PlanImportSheet(''), { height: 'large' }),
+      edit: () => presentSheet(new PlanImportSheet(Plan.planToText(Goals.profile().plan)), { height: 'large' }),
+      remove: () => confirm('Remove this plan?', 'Your targets go back to the ones calculated from your goal. Your food log and weigh-ins stay.', 'Remove', () => upd({ plan: null })),
+      body: () => nav.switchTab('body', true),
+    });
+  }
+  render() {
+    const p = Goals.profile();
+    const pl = p.plan;
+    if (!pl) {
+      return `<div class="stack"><div class="card">${emptyState('No plan yet', 'Import a weekly plan to give every day its own calorie target and see weekly weight milestones.', 'calendar')}</div>
+        <button class="btn primary" data-act="import">IMPORT PLAN</button></div>`;
+    }
+    const today = todayKey();
+    const todayWd = Plan.planDay(pl, today);
+    const latest = Q.bodyStats().find((e) => e.weightKg != null);
+    const st = latest ? Plan.planStatus(pl, latest.weightKg, latest.date) : null;
+    const fin = Plan.finishDate(pl);
+    const exp = Plan.expectedWeight(pl, today);
+    const stText = !st ? (latest ? '' : 'Log a weigh-in in the Body tab to compare with the plan.')
+      : st.state === 'on' ? `On track: ${fmt.kg(latest.weightKg)} vs ${fmt.kg(st.expected)} planned for ${fmt.dayMonth(latest.date)}.`
+        : st.state === 'ahead' ? `Ahead of plan by ${fmt.number(-st.diff, 1)} kg (${fmt.kg(latest.weightKg)} vs ${fmt.kg(st.expected)}). Make sure you're eating enough.`
+          : `Behind plan by ${fmt.number(st.diff, 1)} kg (${fmt.kg(latest.weightKg)} vs ${fmt.kg(st.expected)}). Check portions and snacks, and weigh in under the same conditions each time.`;
+    const head = `<div class="card big"><div class="row-between"><span class="title3">${esc(pl.name)}</span>${st ? pill(st.state === 'on' ? 'ON TRACK' : st.state === 'ahead' ? 'AHEAD' : 'BEHIND', st.state === 'on' ? 'completed' : st.state === 'ahead' ? 'active' : 'partial') : ''}</div>
+      ${pl.targetWeightKg != null ? `<div class="sub num">${fmt.number(pl.startWeightKg, 1)} kg → ${fmt.number(pl.targetWeightKg, 1)} kg · ${fmt.number(pl.rate, 2)} kg a week · finish ≈ ${esc(fmt.dayMonthYear(fin))}</div>
+        <div class="caption muted num">Week ${st ? st.week : Math.max(1, Math.floor((parseDay(today) - parseDay(pl.startDate)) / (7 * 86400000)) + 1)} · aim for about ${fmt.kg(exp)} this week</div>` : ''}
+      ${stText ? `<div class="caption ${st && st.state === 'behind' ? 'text-partial' : 'muted'}">${esc(stText)}</div>` : ''}</div>`;
+    const week = `<div class="section-label">Every week</div><div class="list grouped">${Plan.DAY_ORDER.map((wd) => {
+      const d = pl.days[wd]; const isToday = d === todayWd;
+      return `<div class="list-row ${isToday ? 'today-row' : ''}"><span class="wd short">${weekdayName(wd, true)}</span><span class="grow minw0"><span class="block ellipsis">${esc(d.label || '—')}</span>${d.water ? `<span class="caption faint">+${d.water} ml water</span>` : ''}</span><span class="num ${isToday ? 'strong' : 'muted'}">${fmt.integer(d.kcal)} kcal</span></div>`;
+    }).join('')}</div>
+      <div class="caption faint num">Average ${fmt.integer(Plan.weeklyAverage(pl))} kcal a day${pl.protein != null ? ` · protein ${fmt.integer(pl.protein)} g` : ''}${pl.fat != null ? ` · fat ${fmt.integer(pl.fat)} g` : ''} every day${pl.water != null ? ` · water ${fmt.number(pl.water / 1000, 1)} L` : ''}. Carbs fill the rest of each day's calories.</div>`;
+    const ms = Plan.milestones(pl, 4);
+    const weighIns = Q.bodyStats(false).filter((e) => e.weightKg != null);
+    const near = (day) => { const t = parseDay(day).getTime(); const w = weighIns.filter((e) => Math.abs(e.date - t) < 4 * 86400000); return w.length ? w[w.length - 1].weightKg : null; };
+    const miles = ms.length ? `<div class="section-label">Milestones</div><div class="list grouped">${ms.map((m) => {
+      const actual = m.day <= today ? near(m.day) : null;
+      const ok = actual != null && (pl.targetWeightKg < pl.startWeightKg ? actual <= m.weight + 0.5 : actual >= m.weight - 0.5);
+      return `<div class="list-row"><span class="grow"><span class="block">Week ${m.week}</span><span class="caption faint">${esc(fmt.dayMonthYear(m.day))}</span></span>
+        ${actual != null ? `<span class="caption ${ok ? 'text-completed' : 'text-partial'} num">you: ${fmt.kg(actual)}</span>` : ''}<span class="num muted">${fmt.kg(m.weight)}</span></div>`;
+    }).join('')}</div>` : '';
+    const tips = (pl.tips || []).length ? `<div class="section-label">Tips</div><div class="card">${pl.tips.map((t) => `<div class="sub">• ${esc(t)}</div>`).join('')}</div>` : '';
+    return `<div class="stack">${head}${week}${miles}${tips}
+      <div class="list grouped"><button class="list-row accent" data-act="body"><span class="grow">Log a weigh-in (Body tab)</span>${icon.chevron}</button>
+        <button class="list-row accent" data-act="edit"><span class="grow">Edit plan</span>${icon.chevron}</button>
+        <button class="list-row accent" data-act="import"><span class="grow">Import a different plan</span>${icon.chevron}</button>
+        <button class="list-row destructive" data-act="remove"><span>Remove plan</span></button></div>
+      <div class="caption faint">Weigh in once a week, same day and time (morning, after the toilet, before food). Weight jumps around day to day, so judge progress over 2–3 weeks.</div>
+    </div>`;
+  }
 }
 
 // ---------------------------------------------------------------------------------
