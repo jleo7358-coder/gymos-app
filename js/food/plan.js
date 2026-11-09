@@ -258,7 +258,50 @@ tip: Rugby days: a carb meal 2–3 hours before, then protein and carbs within a
 tip: Milk, yoghurt and cheese cover calcium; red meat, beans and fortified cereal cover iron. Both matter while you're growing.
 tip: Weigh in once a week, same morning, before food. Judge progress over 2–3 weeks.`;
 
+/** Slower loss (~0.3 kg a week) that keeps enough energy, fat, protein and micronutrients for a
+ *  growing teenager who lifts and plays rugby: supports reaching full height, healthy hormone levels
+ *  and muscle gain while getting leaner. UK reference intakes for 15–18-year-old boys. */
+export const GROW_AND_LEAN = `GYMOS PLAN
+name: Grow & lean
+start: 2026-11-09 105
+target: 95
+rate: 0.3
+protein: 160
+fat: 90
+water: 2500
+# Every day: fibre, limits and the vitamins/minerals that matter most for growth
+fibre: 30
+sugars: 50
+satfat: 32
+salt: 6
+calcium: 1000
+vitamin d: 10
+zinc: 9.5
+iron: 11.3
+magnesium: 300
+potassium: 3500
+iodine: 140
+selenium: 70
+vitamin a: 700
+# Each day: calories, label, then that day's own targets (carbs fill the rest)
+mon: 2700 School walk | protein 155 fat 90
+tue: 2950 Lifting – high protein | protein 175 fat 90
+wed: 3250 Rugby training – high carb +500ml | protein 150 fat 85 fibre 35 sugars 70 salt 7
+thu: 2700 School walk | protein 155 fat 90
+fri: 2950 Lifting – high protein | protein 175 fat 90
+sat: 2850 Rest & fuel up for Sunday – high carb | protein 145 fat 75 fibre 35
+sun: 3100 Rugby session +750ml | protein 160 fat 85 sugars 70 salt 7
+tip: Sleep 9 hours. Most growth hormone is released in deep sleep. Aim for bed by about 22:00 on school nights, phone away 30 minutes before.
+tip: Vitamin D: the NHS advises 10 µg a day from October to March for everyone in the UK. A cheap supplement covers it.
+tip: 3 portions of dairy a day (milk, yoghurt, cheese) for calcium, plus eggs, and red meat 2–3 times a week for iron and zinc.
+tip: Oily fish (salmon, mackerel, sardines) once a week for omega-3 and vitamin D.
+tip: Don't go low-fat: fat (eggs, olive oil, nuts, meat, dairy) is needed to make testosterone. Losing extra body fat also helps your hormones.
+tip: Skip "test boosters" and other muscle supplements. They're unregulated and some contain banned substances. Food, sleep and training work.
+tip: Don't skip breakfast before school, and eat a carb meal 2–3 hours before rugby.
+tip: Weigh in once a week, same morning, before food. Measure your height every month too.`;
+
 export const TEMPLATES = [
+  { key: 'grow', name: 'Grow & lean (recommended)', text: () => GROW_AND_LEAN },
   { key: 'carbcycle', name: 'Road to 95 – carb cycle', text: () => ROAD_TO_95_CARB_CYCLE },
   { key: 'simple', name: 'Road to 95 – simple', text: () => ROAD_TO_95 },
 ];
