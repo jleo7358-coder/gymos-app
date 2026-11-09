@@ -185,7 +185,6 @@ function parseJSON(raw) {
  * Returns { items: [{name, portion, grams, confidence, base(per 100 g), totals}], notes, model }.
  */
 export async function analyse({ mode, image = null, text = '', onStatus = () => {} }) {
-  let model = await modelName();
   let prompt;
   if (mode === 'label') prompt = LABEL + (text ? `\nExtra info from the user: ${text}` : '');
   else if (mode === 'text') prompt = `Estimate the nutrition of what I ate: ${text}`;
@@ -199,6 +198,16 @@ export async function analyse({ mode, image = null, text = '', onStatus = () => 
       : { temperature: 0.2, responseMimeType: 'application/json', responseSchema: SCHEMA };
     return { systemInstruction: { parts: [{ text: SYSTEM }] }, contents: [{ role: 'user', parts }], generationConfig };
   };
+  const { data, model } = await askJSON(build, onStatus);
+  return { ...parseResult(data), model };
+}
+
+/**
+ * Sends a JSON request, trying the chosen model, then a simpler request, then other models,
+ * so one busy or failing model doesn't stop you. build(simple) returns the request body.
+ */
+async function askJSON(build, onStatus = () => {}) {
+  let model = await modelName();
   const simpleFirst = getKV('gemini.simple', '') === model;
   const plan = [{ model, simple: simpleFirst }, { model, simple: !simpleFirst }];
   let alts = null;
@@ -238,11 +247,80 @@ export async function analyse({ mode, image = null, text = '', onStatus = () => 
     // Remember what worked so the next request goes straight there.
     if (step.model !== ai.model && getKV('gemini.modelPick', '') !== 'user') await ai.setModel(step.model);
     if (step.simple) setKV('gemini.simple', step.model); else if (getKV('gemini.simple', '') === step.model) deleteKV('gemini.simple');
-    return { ...parseResult(data), model: step.model };
+    return { data, model: step.model };
   }
   const e = lastErr || new AIError('Gemini returned no answer.');
   const tried = [...new Set(plan.map((p) => p.model))].join(', ');
   throw new AIError(`${e.message.replace(/ Try again.*$/, '')} Tried: ${tried}. Try again in a minute.`, { status: e.status, detail: e.detail });
+}
+
+// ---------------------------------------------------------------------------------
+// "Fill the gap": meal ideas that fit what's left of today's targets
+
+const SUGGEST_ITEM = {
+  type: 'OBJECT',
+  properties: {
+    name: { type: 'STRING' }, portion: { type: 'STRING' }, grams: NUM,
+    calories: NUM, protein_g: NUM, carbs_g: NUM, fat_g: NUM, fibre_g: NUM, sugars_g: NUM, saturated_fat_g: NUM, salt_g: NUM,
+  },
+  required: ['name', 'portion', 'grams', 'calories', 'protein_g', 'carbs_g', 'fat_g'],
+};
+const SUGGEST_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    options: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { title: { type: 'STRING' }, why: { type: 'STRING' }, prep_minutes: NUM, items: { type: 'ARRAY', items: SUGGEST_ITEM } },
+        required: ['title', 'why', 'items'],
+      },
+    },
+  },
+  required: ['options'],
+};
+const SUGGEST_SHAPE = `Reply with ONLY a JSON object, no markdown, in exactly this shape:
+{"options": [{"title": "", "why": "", "prep_minutes": 5, "items": [{"name": "", "portion": "", "grams": 0, "calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fibre_g": 0, "sugars_g": 0, "saturated_fat_g": 0, "salt_g": 0}]}]}`;
+
+const SUGGEST_SYSTEM = `You are a practical sports nutrition coach for a UK food-tracking app. Suggest real, simple foods and meals available in UK supermarkets or easy to make at home, with realistic portions in grams and accurate UK nutrition values. Each option must fit the remaining targets as closely as possible: hit the protein, carbs and fat gaps while keeping total calories within about 10% of the calories left, and keep under any stated limits (sugar, saturated fat, salt). Prefer whole foods; at most one item may be a protein shake or bar. Never suggest supplements other than plain protein powder, alcohol, or energy drinks. Give 3 to 5 different options (e.g. a quick no-cook one, a proper meal, a snack combo), ordered best fit first. "why" is one short sentence on how it fills the gap. Keep names short.`;
+
+/**
+ * remaining: { kcal, protein, carbs, fat, fibre, sugarsLeft, satFatLeft, saltLeft }
+ * context: { meal, dayLabel, diet, timeOfDay, likes: [food names], note }
+ */
+export async function suggestMeals({ remaining, context = {}, onStatus = () => {} }) {
+  const r = remaining;
+  const lines = [
+    `Calories left today: ${Math.round(r.kcal)} kcal.`,
+    `Still needed: protein ${Math.max(0, Math.round(r.protein))} g, carbs ${Math.max(0, Math.round(r.carbs))} g, fat ${Math.max(0, Math.round(r.fat))} g${r.fibre > 0 ? `, fibre ${Math.round(r.fibre)} g` : ''}.`,
+    `Stay under: ${[r.sugarsLeft != null ? `sugars ${Math.max(0, Math.round(r.sugarsLeft))} g` : null, r.satFatLeft != null ? `saturated fat ${Math.max(0, Math.round(r.satFatLeft))} g` : null, r.saltLeft != null ? `salt ${Math.max(0, r.saltLeft).toFixed(1)} g` : null].filter(Boolean).join(', ') || 'no extra limits'}.`,
+  ];
+  if (context.meal) lines.push(`It's for: ${context.meal}${context.timeOfDay ? ` (time now ${context.timeOfDay})` : ''}.`);
+  if (context.dayLabel) lines.push(`Today is: ${context.dayLabel}.`);
+  if (context.diet) lines.push(`Diet style: ${context.diet}.`);
+  if (context.likes && context.likes.length) lines.push(`Foods I often eat (use some if they fit): ${context.likes.slice(0, 25).join(', ')}.`);
+  if (context.note) lines.push(`My request: ${context.note}`);
+  if (context.split) lines.push('The gap is large, so this can be split across more than one meal: make options that cover about half of it, as one meal.');
+  const prompt = lines.join('\n');
+  const build = (simple) => ({
+    systemInstruction: { parts: [{ text: SUGGEST_SYSTEM }] },
+    contents: [{ role: 'user', parts: [{ text: simple ? `${prompt}\n\n${SUGGEST_SHAPE}` : prompt }] }],
+    generationConfig: simple
+      ? { temperature: 0.6, responseMimeType: 'application/json' }
+      : { temperature: 0.6, responseMimeType: 'application/json', responseSchema: SUGGEST_SCHEMA },
+  });
+  const { data, model } = await askJSON(build, onStatus);
+  const options = (Array.isArray(data && data.options) ? data.options : []).map((o) => {
+    const parsed = parseResult({ items: Array.isArray(o.items) ? o.items.map((it) => ({ ...it, confidence: null })) : [] }).items;
+    const totals = {};
+    for (const it of parsed) for (const [k, v] of Object.entries(it.totals)) totals[k] = (totals[k] || 0) + v;
+    return {
+      title: String(o.title || 'Meal idea').slice(0, 60), why: String(o.why || '').slice(0, 200),
+      prep: Number(o.prep_minutes) > 0 ? Math.round(Number(o.prep_minutes)) : null, items: parsed, totals,
+    };
+  }).filter((o) => o.items.length);
+  if (!options.length) throw new AIError('Gemini didn’t come up with any ideas. Try again.');
+  return { options, model };
 }
 
 export function parseResult(data) {

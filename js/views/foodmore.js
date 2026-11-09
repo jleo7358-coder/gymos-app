@@ -226,7 +226,7 @@ export class PlanImportSheet extends SheetView {
     this.actions = {
       cancel: () => this.close(),
       done: () => this.importIt(),
-      template: () => { this.text = Plan.ROAD_TO_95; this.check(); this.refresh(); },
+      template: (el) => { const t = Plan.TEMPLATES.find((x) => x.key === el.dataset.k); if (t) { this.text = t.text(); this.check(); this.refresh(); } },
       paste: async () => { try { const t = await navigator.clipboard.readText(); if (t) { this.text = t; this.check(); this.refresh(); } } catch { toast('Long-press the box and choose Paste'); } },
     };
     this.inputs = { text: (el) => { this.text = el.value; this.check(); this.refreshPreview(); } };
@@ -243,8 +243,10 @@ export class PlanImportSheet extends SheetView {
     const pl = this.parsed;
     if (!pl) return '<div class="caption faint">Paste a plan that starts with “GYMOS PLAN”.</div>';
     const fin = Plan.finishDate(pl);
+    const avg = (k) => Plan.DAY_ORDER.reduce((a, wd) => a + Plan.dayMacros(pl, pl.days[wd], 160)[k], 0) / 7;
+    const nN = Object.keys(pl.nutrients || {}).length;
     return `<div class="card"><div class="sub strong">${esc(pl.name)}</div>
-      <div class="caption muted num">${fmt.integer(Plan.weeklyAverage(pl))} kcal a day on average${pl.protein != null ? ` · ${fmt.integer(pl.protein)} g protein` : ''}${pl.targetWeightKg != null ? ` · ${fmt.number(pl.startWeightKg, 1)} → ${fmt.number(pl.targetWeightKg, 1)} kg by about ${esc(fmt.dayMonthYear(fin))}` : ''}</div></div>`;
+      <div class="caption muted num">Average ${fmt.integer(Plan.weeklyAverage(pl))} kcal · P ${fmt.integer(avg('protein'))} · C ${fmt.integer(avg('carbs'))} · F ${fmt.integer(avg('fat'))} g a day${nN ? ` · ${nN} nutrient targets` : ''}${pl.targetWeightKg != null ? ` · ${fmt.number(pl.startWeightKg, 1)} → ${fmt.number(pl.targetWeightKg, 1)} kg by about ${esc(fmt.dayMonthYear(fin))}` : ''}</div></div>`;
   }
   importIt() {
     this.check();
@@ -264,7 +266,9 @@ export class PlanImportSheet extends SheetView {
   render() {
     return `${sheetHeader('Import plan', { right: 'Import' })}
       <textarea class="textarea mono plan-text" placeholder="GYMOS PLAN&#10;name: …&#10;mon: 2600 School walk&#10;…" data-input="text" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(this.text)}</textarea>
-      <div class="tiles"><button class="btn secondary" data-act="paste">Paste</button><button class="btn secondary" data-act="template">Road to 95</button></div>
+      <button class="btn secondary" data-act="paste">Paste from clipboard</button>
+      <div class="section-label">Or start from a ready-made plan</div>
+      <div class="list grouped">${Plan.TEMPLATES.map((t) => `<button class="list-row accent" data-act="template" data-k="${t.key}"><span class="grow">${esc(t.name)}</span>${icon.chevron}</button>`).join('')}</div>
       <div data-plan-preview>${this.preview()}</div>
       <div class="caption faint">Each weekday gets its own calorie target. Importing replaces any earlier plan; your food log isn't changed.</div>`;
   }
@@ -303,9 +307,14 @@ export class PlanScreen extends Screen {
       ${stText ? `<div class="caption ${st && st.state === 'behind' ? 'text-partial' : 'muted'}">${esc(stText)}</div>` : ''}</div>`;
     const week = `<div class="section-label">Every week</div><div class="list grouped">${Plan.DAY_ORDER.map((wd) => {
       const d = pl.days[wd]; const isToday = d === todayWd;
-      return `<div class="list-row ${isToday ? 'today-row' : ''}"><span class="wd short">${weekdayName(wd, true)}</span><span class="grow minw0"><span class="block ellipsis">${esc(d.label || '—')}</span>${d.water ? `<span class="caption faint">+${d.water} ml water</span>` : ''}</span><span class="num ${isToday ? 'strong' : 'muted'}">${fmt.integer(d.kcal)} kcal</span></div>`;
+      const m = Plan.dayMacros(pl, d, 160);
+      const extra = Object.entries(d.targets || {}).filter(([k]) => !['protein', 'carbs', 'fat'].includes(k)).map(([k, v]) => `${N[k] ? N[k].label.toLowerCase() : k} ${fmtN(k, v)}`);
+      if (d.water) extra.push(`+${d.water} ml water`);
+      return `<div class="list-row col ${isToday ? 'today-row' : ''}"><div class="row-between"><span class="row-left minw0"><span class="wd short">${weekdayName(wd, true)}</span><span class="ellipsis">${esc(d.label || '—')}</span></span><span class="num nowrap ${isToday ? 'strong' : 'muted'}">${fmt.integer(d.kcal)} kcal</span></div>
+        <div class="plan-macros num"><span class="pm p">P ${fmt.integer(m.protein)}</span><span class="pm c">C ${fmt.integer(m.carbs)}</span><span class="pm f">F ${fmt.integer(m.fat)}</span>${extra.length ? `<span class="caption faint">${esc(extra.join(' · '))}</span>` : ''}</div></div>`;
     }).join('')}</div>
-      <div class="caption faint num">Average ${fmt.integer(Plan.weeklyAverage(pl))} kcal a day${pl.protein != null ? ` · protein ${fmt.integer(pl.protein)} g` : ''}${pl.fat != null ? ` · fat ${fmt.integer(pl.fat)} g` : ''} every day${pl.water != null ? ` · water ${fmt.number(pl.water / 1000, 1)} L` : ''}. Carbs fill the rest of each day's calories.</div>`;
+      <div class="caption faint num">Average ${fmt.integer(Plan.weeklyAverage(pl))} kcal a day${pl.water != null ? ` · water ${fmt.number(pl.water / 1000, 1)} L` : ''}. Grams of protein (P), carbs (C) and fat (F).</div>
+      ${Object.keys(pl.nutrients || {}).length ? `<div class="section-label">Every day</div><div class="card plan-nutrients">${Object.entries(pl.nutrients).map(([k, v]) => `<span><span class="faint">${esc(N[k] ? N[k].label : k)}</span> <b class="num">${esc(fmtN(k, v))}</b>${N[k] && N[k].kind === 'limit' ? ' <span class="faint">max</span>' : ''}</span>`).join('')}</div>` : ''}`;
     const ms = Plan.milestones(pl, 4);
     const weighIns = Q.bodyStats(false).filter((e) => e.weightKg != null);
     const near = (day) => { const t = parseDay(day).getTime(); const w = weighIns.filter((e) => Math.abs(e.date - t) < 4 * 86400000); return w.length ? w[w.length - 1].weightKg : null; };

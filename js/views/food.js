@@ -11,6 +11,7 @@ import * as Diets from '../food/diets.js';
 import * as Plan from '../food/plan.js';
 import * as Log from '../food/log.js';
 import { ring, bar, NumberSheet, macroLine } from './foodui.js';
+import { FillGapSheet } from './foodsuggest.js';
 import { AddFoodSheet, FoodAmountSheet, ScanSheet, QuickAddSheet, openAI } from './foodadd.js';
 import { PlanScreen, GoalsScreen, NutrientsScreen, TrendsScreen, MyFoodsScreen, SavedMealsScreen, AISettingsScreen, BodyCalcScreen } from './foodmore.js';
 
@@ -31,6 +32,7 @@ export class FoodScreen extends Screen {
       next: () => { if (this.day < todayKey()) { this.day = addDaysKey(this.day, 1); nav.refresh(); } },
       today: () => { this.day = todayKey(); nav.refresh(); },
       more: () => menu([
+        { label: 'Fill my day (meal ideas)', icon: 'sparkle', handler: () => presentSheet(new FillGapSheet({ day: this.day }), { height: 'large' }) },
         { label: 'Weekly plan', icon: 'calendar', handler: () => nav.push(new PlanScreen()) },
         { label: 'Goals & targets', icon: 'target', handler: () => nav.push(new GoalsScreen()) },
         { label: 'Trends', icon: 'chart', handler: () => nav.push(new TrendsScreen()) },
@@ -59,6 +61,7 @@ export class FoodScreen extends Screen {
       },
       setup: () => nav.push(new GoalsScreen()),
       plan: () => nav.push(new PlanScreen()),
+      fill: () => presentSheet(new FillGapSheet({ day: this.day }), { height: 'large' }),
     });
   }
   defaultMeal() { return this.day === todayKey() ? defaultMeal() : 'snacks'; }
@@ -145,6 +148,7 @@ export class FoodScreen extends Screen {
         </div></div>
       <div class="macro-bars">${bar('protein', tot.protein, T.protein, { compact: true })}${bar('carbs', tot.carbs, T.carbs, { compact: true, label: 'Carbs' })}${bar('fat', tot.fat, T.fat, { compact: true })}</div>
       ${this.goalLine(c, day)}
+      ${entries.length && remaining > 250 && day <= today ? `<button class="fill-btn" data-act="fill">${icon.sparkle}<span>${fmt.integer(remaining)} kcal${T.protein - (tot.protein || 0) > 15 ? ` · ${fmt.integer(T.protein - (tot.protein || 0))} g protein` : ''} left — what should I eat?</span>${icon.chevron}</button>` : ''}
     </div>`;
     const quick = `<div class="quick-grid">
       <button class="qa" data-act="scan">${icon.barcode}<span>Scan</span></button>

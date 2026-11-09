@@ -483,3 +483,26 @@ body.rest-flash #app::after { content: ""; position: fixed; inset: 0; pointer-ev
 .today-row { background: rgba(122, 200, 250, 0.08); }
 .textarea.plan-text { min-height: 240px; font-size: 13px; line-height: 1.5; }
 .link-btn.inline { padding: 0; font-size: inherit; }
+.plan-macros { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-left: 54px; font-size: 12.5px; }
+.pm { padding: 1px 6px; border-radius: 4px; font-weight: 600; }
+.pm.p { background: rgba(122, 200, 250, 0.14); color: var(--accent); }
+.pm.c { background: rgba(250, 168, 51, 0.14); color: var(--partial); }
+.pm.f { background: rgba(140, 128, 242, 0.16); color: var(--extra); }
+.plan-nutrients { flex-direction: row; flex-wrap: wrap; gap: 6px 16px; font-size: 13.5px; }
+.fill-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border-radius: 8px; background: rgba(122, 200, 250, 0.1); color: var(--accent); font-size: 13.5px; font-weight: 600; text-align: left; }
+.fill-btn span { flex: 1; }
+.fill-btn svg { width: 18px; height: 18px; }
+.fill-btn svg:last-child { width: 14px; height: 14px; }
+.gap-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.gap-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border-radius: 8px; background: var(--surface); font-size: 16px; font-weight: 600; }
+.gap-chip.p .num { color: var(--accent); } .gap-chip.c .num { color: var(--partial); } .gap-chip.f .num { color: var(--extra); }
+.gap-chip.met .num { color: var(--completed); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 6px 10px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); font-size: 13px; color: var(--text2); }
+.chip.on { border-color: var(--accent); color: var(--accent); }
+.idea { gap: 8px; }
+.idea.added { opacity: 0.6; }
+.idea-items { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.idea-add { width: auto; padding: 0 18px; height: 38px; font-size: 15px; }
+.nowrap { white-space: nowrap; }
+.sheet-body > * { flex-shrink: 0; }

@@ -4,7 +4,7 @@
 import { Q, Calendar } from '../engine.js';
 import { getKV, setKV } from './store.js';
 import { NUTRIENTS, N, F } from './nutrients.js';
-import { planDay } from './plan.js';
+import { planDay, dayMacros } from './plan.js';
 import { addDaysKey, todayKey, parseDay, MS_DAY, sum, clamp } from '../util.js';
 
 export const ACTIVITY = [
@@ -168,10 +168,12 @@ export function compute(day = todayKey(), p = profile()) {
 
   const weight = body.weightKg || 75;
   const targets = { kcal, ...macroTargets(p, kcal, weight) };
-  if (pd && (p.plan.protein != null || p.plan.fat != null)) {
-    if (p.plan.protein != null) targets.protein = p.plan.protein;
-    if (p.plan.fat != null) targets.fat = p.plan.fat;
-    targets.carbs = Math.max(0, round((kcal - targets.protein * 4 - targets.fat * 9) / 4));
+  if (pd) {
+    const hasMacros = p.plan.protein != null || p.plan.fat != null || Object.keys(pd.targets || {}).some((k) => ['protein', 'carbs', 'fat'].includes(k));
+    if (hasMacros) {
+      const m = dayMacros(p.plan, { ...pd, kcal }, targets.protein);
+      targets.protein = m.protein; targets.carbs = Math.max(0, m.carbs); targets.fat = Math.max(0, m.fat);
+    }
   }
   for (const k of ['protein', 'carbs', 'fat']) if (ov[k] != null) targets[k] = ov[k];
   targets.fibre = ov.fibre ?? p.fibre;
@@ -179,6 +181,12 @@ export function compute(day = todayKey(), p = profile()) {
   targets.satFat = ov.satFat ?? round(kcal * (p.satFatPct / 100) / 9);
   targets.salt = ov.salt ?? p.saltLimit;
   for (const n of NUTRIENTS) if (n.nrv != null) targets[n.key] = ov[n.key] ?? (p.nutrients[n.key] ?? n.nrv);
+  // Plan-wide nutrient targets, then the day's own (your custom targets in Goals still win).
+  if (pd) {
+    for (const src of [p.plan.nutrients || {}, pd.targets || {}]) {
+      for (const [k, v] of Object.entries(src)) if (!['protein', 'carbs', 'fat', 'kcal'].includes(k) && ov[k] == null) targets[k] = v;
+    }
+  }
   const waterBase = p.waterMl ?? round(35 * weight, 50);
   targets.water = pd ? (p.plan.water ?? waterBase) + (pd.water || 0) : waterBase + (training ? (p.waterTrainingMl || 0) : 0);
 
